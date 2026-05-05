@@ -40,7 +40,7 @@ var syncIntervalOption = new Option<int>("--sync-interval-seconds")
     DefaultValueFactory = _ => 30,
 };
 
-var rootCommand = new RootCommand("FUSE-like virtual filesystem on Windows backed by Amazon S3, using ProjFS.")
+var rootCommand = new RootCommand("Windows port of AWS S3 Files: mount an Amazon S3 bucket as a local folder via ProjFS.")
 {
     bucketOption,
     rootFolderOption,

@@ -3,7 +3,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AssemblyName>s3files</AssemblyName>
-    <Description>FUSE-like virtual filesystem on Windows backed by Amazon S3, using ProjFS.</Description>
+    <Description>Windows port of AWS S3 Files: mount an Amazon S3 bucket as a local folder via ProjFS.</Description>
 
     <!-- Publish target: x64 Native AOT, self-contained -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
