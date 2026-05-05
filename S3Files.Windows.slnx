@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="README.md" />
+  </Folder>
+  <Project Path="src/S3Files.Windows/S3Files.Windows.csproj" />
+  <Project Path="tests/S3Files.Windows.UnitTests/S3Files.Windows.UnitTests.csproj" />
+  <Project Path="tests/S3Files.Windows.IntegrationTests/S3Files.Windows.IntegrationTests.csproj" />
+</Solution>

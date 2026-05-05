@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <PublishAot>false</PublishAot>
+    <IsAotCompatible>false</IsAotCompatible>
+    <!--
+      Tests reference internal types via [InternalsVisibleTo].
+      We don't need TreatWarningsAsErrors for tests.
+    -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!--
+      Allow snake_case-style test method names (CA1707) and ignore disposability rule
+      noise (CA1001) since fixtures handle cleanup via IAsyncLifetime / IDisposable.
+    -->
+    <NoWarn>$(NoWarn);CA1707;CA1001;CA1051;CA1062</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\S3Files.Windows\S3Files.Windows.csproj" />
+  </ItemGroup>
+
+</Project>
