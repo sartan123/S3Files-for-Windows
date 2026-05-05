@@ -26,6 +26,7 @@ jobs:
     name: Publish & Release (Windows, win-x64 AOT)
     runs-on: windows-latest
     timeout-minutes: 30
+    environment: release
     permissions:
       contents: write
     steps:
