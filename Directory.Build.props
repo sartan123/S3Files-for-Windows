@@ -1,0 +1,61 @@
+<Project>
+    <Import Project="Version.props" />
+
+    <PropertyGroup>
+        <TargetFramework>net10.0-windows</TargetFramework>
+        <LangVersion>latest</LangVersion>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+
+        <!-- Code quality -->
+        <AnalysisLevel>latest-recommended</AnalysisLevel>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+        <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
+
+        <!-- Assembly metadata -->
+        <Version>$(S3FilesVersion)</Version>
+        <Authors>sartan123</Authors>
+        <Company>sartan123</Company>
+        <Product>S3Files for Windows</Product>
+        <Copyright>Copyright (c) sartan123</Copyright>
+        <RepositoryUrl>https://github.com/sartan123/S3Files-for-Windows</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+
+        <!-- Deterministic / SourceLink -->
+        <Deterministic>true</Deterministic>
+        <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+        <PublishRepositoryUrl>true</PublishRepositoryUrl>
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+        <!-- NuGet Audit -->
+        <NuGetAudit>true</NuGetAudit>
+        <NuGetAuditLevel>high</NuGetAuditLevel>
+        <NuGetAuditMode>all</NuGetAuditMode>
+        <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
+
+        <!--
+          AOT/Trim warnings come from third-party libs (AWSSDK, System.CommandLine, ProjFS).
+          Keep them as warnings even when TreatWarningsAsErrors=true so Release builds pass,
+          while still surfacing them. Real AOT issues are gated by `dotnet publish`.
+        -->
+        <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2026;IL2104;IL3050;IL3053;IL3056;IL3058</WarningsNotAsErrors>
+
+        <!--
+          We use Microsoft.Extensions.Logging directly (no LoggerMessage source generator),
+          intentionally trading micro-optimizations for a thinner logging surface.
+          CA1848: prefer LoggerMessage delegates.
+          CA1873: argument may be expensive when logging is disabled.
+        -->
+        <NoWarn>$(NoWarn);CA1848;CA1873</NoWarn>
+
+        <!-- Dependency Lock -->
+        <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
+    </ItemGroup>
+
+</Project>
