@@ -24,15 +24,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="AWSSDK.S3" />
     <PackageReference Include="System.CommandLine" />
     <PackageReference Include="Microsoft.Windows.ProjFS" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="S3Files.Windows.UnitTests" />
-    <InternalsVisibleTo Include="S3Files.Windows.IntegrationTests" />
+    <ProjectReference Include="..\S3Files.Windows.Core\S3Files.Windows.Core.csproj" />
   </ItemGroup>
 
 </Project>

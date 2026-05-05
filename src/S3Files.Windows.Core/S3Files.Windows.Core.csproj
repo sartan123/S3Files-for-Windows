@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Cross-platform library: hosts the S3 backend so it can be referenced
+         from Linux-runnable test projects (LocalStack via Testcontainers).
+         Override the net10.0-windows default in Directory.Build.props. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <Description>Cross-platform S3 backend used by the S3Files Windows host.</Description>
+    <!-- Core itself is AOT-safe; AOT warnings for transitive AWSSDK references
+         are tolerated globally via WarningsNotAsErrors in Directory.Build.props. -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Match assembly names: the host project sets AssemblyName=s3files. -->
+    <InternalsVisibleTo Include="s3files" />
+    <InternalsVisibleTo Include="S3Files.Windows.UnitTests" />
+    <InternalsVisibleTo Include="S3Files.Windows.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!-- Override the net10.0-windows default in Directory.Build.props: the
+         covered code (S3Util) is cross-platform and we want this to be runnable
+         on Linux CI as well. -->
+    <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <PublishAot>false</PublishAot>
@@ -27,7 +31,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\S3Files.Windows\S3Files.Windows.csproj" />
+    <ProjectReference Include="..\..\src\S3Files.Windows.Core\S3Files.Windows.Core.csproj" />
   </ItemGroup>
 
 </Project>

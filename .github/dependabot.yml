@@ -1,0 +1,31 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned to commit SHAs while still receiving security
+  # updates. Dependabot rewrites the SHA + version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # NuGet packages are centrally managed in Directory.Packages.props.
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      aws-sdk:
+        patterns:
+          - "AWSSDK.*"
+      microsoft-extensions:
+        patterns:
+          - "Microsoft.Extensions.*"
+      test-stack:
+        patterns:
+          - "xunit*"
+          - "Microsoft.NET.Test.Sdk"
+          - "Testcontainers*"

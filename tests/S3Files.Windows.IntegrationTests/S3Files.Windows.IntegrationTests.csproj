@@ -1,6 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!-- Override the net10.0-windows default in Directory.Build.props: these
+         tests exercise the cross-platform S3 backend against LocalStack via
+         Testcontainers, which requires a Linux Docker engine. Targeting plain
+         net10.0 lets them run on ubuntu-latest in CI. -->
+    <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <PublishAot>false</PublishAot>
@@ -22,7 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\S3Files.Windows\S3Files.Windows.csproj" />
+    <ProjectReference Include="..\..\src\S3Files.Windows.Core\S3Files.Windows.Core.csproj" />
   </ItemGroup>
 
 </Project>
