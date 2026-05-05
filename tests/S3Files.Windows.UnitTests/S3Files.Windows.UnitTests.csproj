@@ -18,7 +18,7 @@
       Allow snake_case-style test method names (CA1707) and ignore disposability rule
       noise (CA1001) since fixtures handle cleanup via IAsyncLifetime / IDisposable.
     -->
-    <NoWarn>$(NoWarn);CA1707;CA1001;CA1051;CA1062</NoWarn>
+    <NoWarn>$(NoWarn);CA1707;CA1001;CA1051;CA1062;CA1861</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
