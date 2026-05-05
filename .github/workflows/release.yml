@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Deny-by-default at the workflow level. The release job opts in to
+# `contents: write` only because it must create a GitHub Release.
+permissions: {}
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  NUGET_XMLDOC_MODE: skip
+
+# Never cancel an in-flight release for the same tag — the workflow either
+# completes and produces a Release, or fails loudly so we can re-tag.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish & Release (Windows, win-x64 AOT)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        # actions/checkout@v4.3.1
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Resolve version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          $ref = '${{ github.ref_name }}'
+          if ($ref -notmatch '^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.+-]+)?)$') {
+            Write-Error "Tag '$ref' is not of the form 'vMAJOR.MINOR.PATCH[-prerelease]'."
+            exit 1
+          }
+          $version = $Matches[1]
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$ref"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Resolved version: $version (tag: $ref)"
+
+      - name: Setup .NET
+        # actions/setup-dotnet@v4.3.1
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        # actions/cache@v4.3.0
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/packages.lock.json', 'Directory.Packages.props', 'global.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Restore (locked)
+        run: dotnet restore src/S3Files.Windows/S3Files.Windows.csproj --locked-mode
+
+      - name: Publish (Native AOT, self-contained, win-x64)
+        run: >
+          dotnet publish src/S3Files.Windows/S3Files.Windows.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          --no-restore
+          -p:S3FilesVersion=${{ steps.ver.outputs.version }}
+          -p:ContinuousIntegrationBuild=true
+          --output publish
+
+      - name: Verify publish output
+        shell: pwsh
+        run: |
+          $exe = Join-Path 'publish' 's3files.exe'
+          if (-not (Test-Path $exe)) {
+            Write-Error "Expected publish artifact '$exe' was not produced."
+            exit 1
+          }
+          Get-ChildItem -Path publish -Recurse | Select-Object FullName, Length
+
+      - name: Package zip
+        id: pkg
+        shell: pwsh
+        run: |
+          $version = '${{ steps.ver.outputs.version }}'
+          $zipName = "s3files-$version-win-x64.zip"
+          $zipPath = Join-Path (Get-Location) $zipName
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path 'publish\*' -DestinationPath $zipPath -CompressionLevel Optimal
+          "zip-name=$zipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "zip-path=$zipPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Compute SHA256 checksum
+        id: sha
+        shell: pwsh
+        run: |
+          $zip = '${{ steps.pkg.outputs.zip-path }}'
+          $name = '${{ steps.pkg.outputs.zip-name }}'
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLowerInvariant()
+          $shaFile = "$zip.sha256"
+          # `sha256sum -c`-compatible format: "<hash>  <filename>".
+          "$hash  $name" | Out-File -FilePath $shaFile -Encoding ascii
+          "sha-path=$shaFile" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload publish artifact (workflow)
+        # actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: s3files-${{ steps.ver.outputs.version }}-win-x64
+          path: |
+            ${{ steps.pkg.outputs.zip-path }}
+            ${{ steps.sha.outputs.sha-path }}
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag     = '${{ steps.ver.outputs.tag }}'
+          $version = '${{ steps.ver.outputs.version }}'
+          $zip     = '${{ steps.pkg.outputs.zip-path }}'
+          $sha     = '${{ steps.sha.outputs.sha-path }}'
+
+          $args = @(
+            'release', 'create', $tag, $zip, $sha,
+            '--title',          "S3Files for Windows $version",
+            '--generate-notes',
+            '--verify-tag'
+          )
+          if ($version -match '-') { $args += '--prerelease' }
+
+          & gh @args
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
