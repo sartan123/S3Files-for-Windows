@@ -201,7 +201,8 @@
       "s3files.windows.core": {
         "type": "Project",
         "dependencies": {
-          "AWSSDK.S3": "[4.0.22.2, )"
+          "AWSSDK.S3": "[4.0.22.2, )",
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.7, )"
         }
       },
       "Microsoft.Extensions.Logging.Abstractions": {

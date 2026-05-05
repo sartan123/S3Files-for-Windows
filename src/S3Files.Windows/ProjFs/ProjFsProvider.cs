@@ -1,8 +1,10 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Windows.ProjFS;
 using S3Files.Windows.S3;
+using S3Files.Windows.Sync;
+using S3Files.Windows.Sync.ProjFs;
 using System.Collections.Concurrent;
-using System.Text;
 
 namespace S3Files.Windows.ProjFs;
 
@@ -11,20 +13,31 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     private static readonly byte[] ProviderId = [1];
 
     private readonly ILogger<ProjFsProvider> logger;
+    private readonly ILoggerFactory loggerFactory;
     private readonly string syncRootPath;
     private readonly VirtualizationInstance virtualizationInstance;
     private readonly S3Backend backend;
     private readonly ConcurrentDictionary<Guid, DirectoryEnumerationSession> activeEnumerations = new();
     private readonly NotificationCallbacks notificationCallbacks;
+    private readonly S3ChangeWatcher? changeWatcher;
 
     private bool virtualizationInstanceStarted;
 
     public ProjFsProviderOptions Options { get; }
 
     public ProjFsProvider(ProjFsProviderOptions options, ILogger<ProjFsProvider> logger)
+        : this(options, logger, NullLoggerFactory.Instance)
+    {
+    }
+
+    public ProjFsProvider(
+        ProjFsProviderOptions options,
+        ILogger<ProjFsProvider> logger,
+        ILoggerFactory loggerFactory)
     {
         Options = options;
         this.logger = logger;
+        this.loggerFactory = loggerFactory;
         syncRootPath = options.VirtRoot;
         backend = new S3Backend(options.S3Bucket, options.EndpointUrl);
 
@@ -56,10 +69,24 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             notificationMappings: notificationMappings);
 
         notificationCallbacks = new NotificationCallbacks(this, virtualizationInstance, notificationMappings);
+
+        changeWatcher = CreateChangeWatcher();
     }
 
     public void Dispose()
     {
+        if (changeWatcher is not null)
+        {
+            try
+            {
+                changeWatcher.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to stop S3 change watcher");
+            }
+        }
+
         if (virtualizationInstanceStarted)
         {
             try
@@ -84,6 +111,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             return false;
         }
         virtualizationInstanceStarted = true;
+
+        // The watcher is fire-and-forget: it self-cancels on Dispose. Polling only starts
+        // after virtualization is up so the command sink is safe to call.
+        _ = changeWatcher?.StartAsync(CancellationToken.None);
         return true;
     }
 
@@ -172,7 +203,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
                 fileAttributes: attrs,
                 endOfFile: size,
                 isDirectory: isDirectory,
-                contentId: BuildContentId(etag),
+                contentId: S3Util.BuildContentId(etag),
                 providerId: ProviderId);
         }
         catch (Exception ex)
@@ -211,6 +242,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     public void HandleFileModified(string relativePath, bool isDirectory)
     {
         if (Options.ReadOnly || isDirectory || string.IsNullOrEmpty(relativePath)) return;
+        if (IsInLostAndFound(relativePath)) return;
 
         var fullPath = Path.Combine(syncRootPath, relativePath);
         if (!File.Exists(fullPath))
@@ -218,6 +250,9 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             logger.LogDebug("Modified notification but file missing: {RelativePath}", relativePath);
             return;
         }
+
+        var s3Key = S3Util.ToS3Key(relativePath);
+        using var _ = changeWatcher?.BeginLocalKeyChange(s3Key);
 
         try
         {
@@ -229,8 +264,9 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
                 bufferSize: 81920,
                 FileOptions.SequentialScan);
 
-            backend.UploadAsync(relativePath, stream, ifMatchETag: null, CancellationToken.None)
+            var result = backend.UploadAsync(relativePath, stream, ifMatchETag: null, CancellationToken.None)
                 .GetAwaiter().GetResult();
+            changeWatcher?.RecordLocalUpload(s3Key, result.ETag, result.Size, result.LastModified);
 
             logger.LogInformation("Uploaded {RelativePath} ({Size} bytes)", relativePath, stream.Length);
         }
@@ -247,19 +283,26 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     public void HandleFileDeleted(string relativePath, bool isDirectory)
     {
         if (Options.ReadOnly || string.IsNullOrEmpty(relativePath)) return;
+        if (IsInLostAndFound(relativePath)) return;
+
+        var s3Key = S3Util.ToS3Key(relativePath);
 
         try
         {
             if (isDirectory)
             {
+                using var _ = changeWatcher?.BeginLocalPrefixChange(s3Key);
                 backend.DeletePrefixAsync(relativePath, CancellationToken.None)
                     .GetAwaiter().GetResult();
+                changeWatcher?.RecordLocalDeletePrefix(s3Key);
                 logger.LogInformation("Deleted prefix {RelativePath}/", relativePath);
             }
             else
             {
+                using var _ = changeWatcher?.BeginLocalKeyChange(s3Key);
                 backend.DeleteAsync(relativePath, CancellationToken.None)
                     .GetAwaiter().GetResult();
+                changeWatcher?.RecordLocalDelete(s3Key);
                 logger.LogInformation("Deleted {RelativePath}", relativePath);
             }
         }
@@ -273,20 +316,30 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     {
         if (Options.ReadOnly) return;
         if (string.IsNullOrEmpty(oldRelativePath) || string.IsNullOrEmpty(newRelativePath)) return;
+        if (IsInLostAndFound(oldRelativePath) || IsInLostAndFound(newRelativePath)) return;
+
+        var oldKey = S3Util.ToS3Key(oldRelativePath);
+        var newKey = S3Util.ToS3Key(newRelativePath);
 
         try
         {
             if (isDirectory)
             {
+                using var oldGuard = changeWatcher?.BeginLocalPrefixChange(oldKey);
+                using var newGuard = changeWatcher?.BeginLocalPrefixChange(newKey);
                 backend.RenamePrefixAsync(oldRelativePath, newRelativePath, CancellationToken.None)
                     .GetAwaiter().GetResult();
+                changeWatcher?.RecordLocalRenamePrefix(oldKey, newKey);
                 logger.LogInformation(
                     "Renamed prefix {Old}/ -> {New}/", oldRelativePath, newRelativePath);
             }
             else
             {
+                using var oldGuard = changeWatcher?.BeginLocalKeyChange(oldKey);
+                using var newGuard = changeWatcher?.BeginLocalKeyChange(newKey);
                 backend.RenameAsync(oldRelativePath, newRelativePath, CancellationToken.None)
                     .GetAwaiter().GetResult();
+                changeWatcher?.RecordLocalRename(oldKey, newKey);
                 logger.LogInformation("Renamed {Old} -> {New}", oldRelativePath, newRelativePath);
             }
         }
@@ -294,6 +347,50 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         {
             logger.LogError(ex, "Rename failed for {Old} -> {New}", oldRelativePath, newRelativePath);
         }
+    }
+
+    private static bool IsInLostAndFound(string relativePath) =>
+        relativePath.StartsWith(
+            S3ChangeWatcher.LostAndFoundDirectoryName + "\\",
+            StringComparison.OrdinalIgnoreCase)
+        || string.Equals(
+            relativePath,
+            S3ChangeWatcher.LostAndFoundDirectoryName,
+            StringComparison.OrdinalIgnoreCase);
+
+    private S3ChangeWatcher? CreateChangeWatcher()
+    {
+        if (Options.ReadOnly)
+        {
+            // Read-only mode is for inspection scenarios — we still want to surface external
+            // S3 changes, but conflict resolution requires write access to lost+found, so we
+            // gate the whole watcher off for the simplest correct first impl.
+            logger.LogInformation("Read-only mode: S3 change watcher disabled.");
+            return null;
+        }
+
+        if (Options.SyncIntervalSeconds <= 0)
+        {
+            logger.LogInformation(
+                "Sync interval is {Interval}s; S3 change watcher disabled.",
+                Options.SyncIntervalSeconds);
+            return null;
+        }
+
+        var sink = new VirtualizationCommandSink(
+            virtualizationInstance,
+            ProviderId,
+            loggerFactory.CreateLogger<VirtualizationCommandSink>());
+        var quarantine = new LostAndFoundQuarantine(
+            syncRootPath,
+            loggerFactory.CreateLogger<LostAndFoundQuarantine>());
+
+        return new S3ChangeWatcher(
+            backend,
+            sink,
+            quarantine,
+            TimeSpan.FromSeconds(Options.SyncIntervalSeconds),
+            loggerFactory.CreateLogger<S3ChangeWatcher>());
     }
 
     private void EnsureVirtualizationRoot()
@@ -321,20 +418,5 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             list.Add(entry);
         }
         return list;
-    }
-
-    private static byte[] BuildContentId(string etag)
-    {
-        // ProjFS allows up to 128 bytes for contentId. We hash the ETag (or empty bytes if absent)
-        // into a fixed 16-byte buffer to keep placeholders comparable across runs.
-        var result = new byte[16];
-        if (string.IsNullOrEmpty(etag)) return result;
-
-        var trimmed = etag.AsSpan().Trim('"');
-        var byteCount = Encoding.UTF8.GetByteCount(trimmed);
-        Span<byte> bytes = byteCount <= 256 ? stackalloc byte[byteCount] : new byte[byteCount];
-        Encoding.UTF8.GetBytes(trimmed, bytes);
-        bytes[..Math.Min(bytes.Length, result.Length)].CopyTo(result);
-        return result;
     }
 }

@@ -11,4 +11,6 @@ internal sealed class ProjFsProviderOptions
     public bool Verbose { get; init; }
 
     public bool ReadOnly { get; init; }
+
+    public int SyncIntervalSeconds { get; init; } = 30;
 }

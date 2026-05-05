@@ -34,6 +34,12 @@ var readOnlyOption = new Option<bool>("--read-only")
     Hidden = true,
 };
 
+var syncIntervalOption = new Option<int>("--sync-interval-seconds")
+{
+    Description = "Polling interval (seconds) for detecting external S3 changes. 0 disables.",
+    DefaultValueFactory = _ => 30,
+};
+
 var rootCommand = new RootCommand("FUSE-like virtual filesystem on Windows backed by Amazon S3, using ProjFS.")
 {
     bucketOption,
@@ -41,6 +47,7 @@ var rootCommand = new RootCommand("FUSE-like virtual filesystem on Windows backe
     endpointUrlOption,
     verboseOption,
     readOnlyOption,
+    syncIntervalOption,
 };
 
 rootCommand.SetAction(parseResult =>
@@ -52,6 +59,7 @@ rootCommand.SetAction(parseResult =>
         EndpointUrl = parseResult.GetValue(endpointUrlOption),
         Verbose = parseResult.GetValue(verboseOption),
         ReadOnly = parseResult.GetValue(readOnlyOption),
+        SyncIntervalSeconds = parseResult.GetValue(syncIntervalOption),
     };
 
     using var loggerFactory = LoggerFactory.Create(builder => builder
@@ -79,7 +87,8 @@ return rootCommand.Parse(args).Invoke();
 
 static int RunProvider(ProjFsProviderOptions options, ILoggerFactory loggerFactory, ILogger logger)
 {
-    using var provider = new ProjFsProvider(options, loggerFactory.CreateLogger<ProjFsProvider>());
+    using var provider = new ProjFsProvider(
+        options, loggerFactory.CreateLogger<ProjFsProvider>(), loggerFactory);
     if (!provider.StartVirtualization())
     {
         logger.LogError("Failed to start provider.");
