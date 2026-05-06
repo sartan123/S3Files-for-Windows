@@ -8,6 +8,8 @@ internal sealed class ProjFsProviderOptions
 
     public string? EndpointUrl { get; init; }
 
+    public string? Region { get; init; }
+
     public string? KeyPrefix { get; init; }
 
     public bool Verbose { get; init; }

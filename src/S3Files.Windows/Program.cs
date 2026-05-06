@@ -23,6 +23,11 @@ var endpointUrlOption = new Option<string?>("--endpoint-url")
     Description = "Override command's default URL with the given URL.",
 };
 
+var regionOption = new Option<string?>("--region")
+{
+    Description = "AWS region (e.g. us-east-1, ap-northeast-1). When omitted, the SDK falls back to the standard credential/region resolution chain (env vars, profile, IMDS).",
+};
+
 var prefixOption = new Option<string?>("--prefix")
 {
     Description = "Optional key prefix within the bucket. When set, only objects under this prefix are projected into the virtualization root.",
@@ -50,6 +55,7 @@ var rootCommand = new RootCommand("Windows port of AWS S3 Files: mount an Amazon
     bucketOption,
     rootFolderOption,
     endpointUrlOption,
+    regionOption,
     prefixOption,
     verboseOption,
     readOnlyOption,
@@ -63,6 +69,7 @@ rootCommand.SetAction(parseResult =>
         S3Bucket = parseResult.GetValue(bucketOption)!,
         VirtRoot = parseResult.GetValue(rootFolderOption)!,
         EndpointUrl = parseResult.GetValue(endpointUrlOption),
+        Region = parseResult.GetValue(regionOption),
         KeyPrefix = parseResult.GetValue(prefixOption),
         Verbose = parseResult.GetValue(verboseOption),
         ReadOnly = parseResult.GetValue(readOnlyOption),

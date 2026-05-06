@@ -39,7 +39,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         this.logger = logger;
         this.loggerFactory = loggerFactory;
         syncRootPath = options.VirtRoot;
-        backend = new S3Backend(options.S3Bucket, options.EndpointUrl, options.KeyPrefix);
+        backend = new S3Backend(options.S3Bucket, options.EndpointUrl, options.KeyPrefix, options.Region);
 
         EnsureVirtualizationRoot();
 

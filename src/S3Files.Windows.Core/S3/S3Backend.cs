@@ -16,11 +16,11 @@ internal sealed class S3Backend : IS3Backend, IDisposable
 
     private readonly TransferUtility transferUtility;
 
-    public S3Backend(string bucketName, string? endpointUrl = null, string? keyPrefix = null)
+    public S3Backend(string bucketName, string? endpointUrl = null, string? keyPrefix = null, string? region = null)
     {
         this.bucketName = bucketName;
         this.keyPrefix = S3Util.NormalizeKeyPrefix(keyPrefix);
-        client = CreateClient(endpointUrl);
+        client = CreateClient(endpointUrl, region);
         // Share a single TransferUtility per backend: it's documented thread-safe, holds no
         // upload-specific state, and disposes only its internally-created client (not ours).
         transferUtility = new TransferUtility(client, new TransferUtilityConfig
@@ -449,7 +449,7 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         batch.Clear();
     }
 
-    private static AmazonS3Client CreateClient(string? endpointUrl)
+    private static AmazonS3Client CreateClient(string? endpointUrl, string? region)
     {
         var config = new AmazonS3Config
         {
@@ -464,6 +464,13 @@ internal sealed class S3Backend : IS3Backend, IDisposable
             // the upload with "Checksum Type mismatch". Only relax for endpoint-override mode.
             config.RequestChecksumCalculation = Amazon.Runtime.RequestChecksumCalculation.WHEN_REQUIRED;
             config.ResponseChecksumValidation = Amazon.Runtime.ResponseChecksumValidation.WHEN_REQUIRED;
+        }
+        if (!string.IsNullOrEmpty(region))
+        {
+            // ServiceURL takes precedence over RegionEndpoint when both are set, so honoring
+            // an explicit --region alongside --endpoint-url still routes traffic to the override
+            // while letting the region drive request signing.
+            config.RegionEndpoint = Amazon.RegionEndpoint.GetBySystemName(region);
         }
         return new AmazonS3Client(config);
     }

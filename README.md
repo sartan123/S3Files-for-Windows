@@ -62,6 +62,7 @@ Open `C:\Users\you\S3Files` in Explorer and the bucket contents appear.
 | `--bucket` | S3 bucket to expose through the filesystem (required) | — |
 | `--root-folder` | Path to the virtualization root (required) | — |
 | `--endpoint-url` | Override the default S3 endpoint URL (e.g. for LocalStack / MinIO) | AWS default |
+| `--region` | AWS region (e.g. `us-east-1`, `ap-northeast-1`). When omitted, the SDK falls back to the standard region resolution chain (env vars, profile, IMDS). | — |
 | `--prefix` | Optional key prefix within the bucket. When set, only objects under this prefix are projected into the virtualization root. | — |
 | `--sync-interval-seconds` | Polling interval for detecting external S3 changes; `0` disables | `30` |
 | `--verbose` | Enable debug-level logging | off |
