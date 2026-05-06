@@ -162,6 +162,21 @@ internal sealed class S3Backend : IS3Backend, IDisposable
         while (!string.IsNullOrEmpty(request.ContinuationToken));
     }
 
+    public async Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken ct)
+    {
+        var resp = await client.GetBucketVersioningAsync(new GetBucketVersioningRequest
+        {
+            BucketName = bucketName,
+        }, ct).ConfigureAwait(false);
+
+        // S3 returns no Status element until versioning has ever been configured. Anything
+        // other than the explicit "Enabled" state (never configured, or suspended after
+        // having been enabled) is collapsed into NotEnabled — the only state we care about
+        // for the startup safety check is "is versioning actively protecting this bucket".
+        var status = resp.VersioningConfig?.Status?.Value;
+        return status == "Enabled" ? BucketVersioningStatus.Enabled : BucketVersioningStatus.NotEnabled;
+    }
+
     public async Task<S3ObjectInfo?> HeadAsync(string relativePath, CancellationToken ct)
     {
         var relKey = S3Util.ToS3Key(relativePath);

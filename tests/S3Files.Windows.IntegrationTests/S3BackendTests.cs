@@ -48,6 +48,46 @@ public sealed class S3BackendTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetBucketVersioningStatus_returns_NotEnabled_for_fresh_bucket()
+    {
+        var status = await backend.GetBucketVersioningStatusAsync(CancellationToken.None);
+        Assert.Equal(BucketVersioningStatus.NotEnabled, status);
+    }
+
+    [Fact]
+    public async Task GetBucketVersioningStatus_returns_Enabled_when_versioning_turned_on()
+    {
+        await adminClient.PutBucketVersioningAsync(new PutBucketVersioningRequest
+        {
+            BucketName = bucket,
+            VersioningConfig = new S3BucketVersioningConfig { Status = VersionStatus.Enabled },
+        });
+
+        var status = await backend.GetBucketVersioningStatusAsync(CancellationToken.None);
+        Assert.Equal(BucketVersioningStatus.Enabled, status);
+    }
+
+    [Fact]
+    public async Task GetBucketVersioningStatus_treats_Suspended_as_NotEnabled()
+    {
+        // Suspended is not "actively protecting writes", so the backend collapses it into
+        // NotEnabled — the same state the startup safety check refuses to run against.
+        await adminClient.PutBucketVersioningAsync(new PutBucketVersioningRequest
+        {
+            BucketName = bucket,
+            VersioningConfig = new S3BucketVersioningConfig { Status = VersionStatus.Enabled },
+        });
+        await adminClient.PutBucketVersioningAsync(new PutBucketVersioningRequest
+        {
+            BucketName = bucket,
+            VersioningConfig = new S3BucketVersioningConfig { Status = VersionStatus.Suspended },
+        });
+
+        var status = await backend.GetBucketVersioningStatusAsync(CancellationToken.None);
+        Assert.Equal(BucketVersioningStatus.NotEnabled, status);
+    }
+
+    [Fact]
     public async Task Upload_writes_content_retrievable_via_Head_and_ReadRange()
     {
         var payload = "hello, s3"u8.ToArray();

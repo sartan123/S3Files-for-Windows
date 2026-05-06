@@ -266,6 +266,8 @@ public sealed class S3ChangeWatcherTests
             throw new NotImplementedException();
         public IAsyncEnumerable<S3ObjectInfo> ListRecursiveAsync(string r, CancellationToken c) =>
             throw new NotImplementedException();
+        public Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken c) =>
+            throw new NotImplementedException();
         public Task<S3ObjectInfo?> HeadAsync(string r, CancellationToken c) =>
             throw new NotImplementedException();
         public Task ReadRangeAsync(string r, long o, long l, Stream d, CancellationToken c) =>

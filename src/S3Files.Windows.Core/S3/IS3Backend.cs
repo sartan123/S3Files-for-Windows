@@ -2,6 +2,12 @@ namespace S3Files.Windows.S3;
 
 internal readonly record struct UploadResult(string ETag, string VersionId, long Size, DateTimeOffset LastModified);
 
+internal enum BucketVersioningStatus
+{
+    NotEnabled,
+    Enabled,
+}
+
 internal interface IS3Backend
 {
     IAsyncEnumerable<S3ObjectInfo> ListAsync(string relativeDirectory, CancellationToken ct);
@@ -9,6 +15,8 @@ internal interface IS3Backend
     IAsyncEnumerable<S3ObjectInfo> ListAllAsync(CancellationToken ct);
 
     IAsyncEnumerable<S3ObjectInfo> ListRecursiveAsync(string relativeDirectory, CancellationToken ct);
+
+    Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken ct);
 
     Task<S3ObjectInfo?> HeadAsync(string relativePath, CancellationToken ct);
 

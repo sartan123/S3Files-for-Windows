@@ -104,6 +104,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
 
     public bool StartVirtualization()
     {
+        // Refuse to start before touching ProjFS so we leave no virtualization instance
+        // running on a bucket that doesn't meet the safety requirement.
+        if (!EnsureBucketVersioningEnabled()) return false;
+
         var hr = virtualizationInstance.StartVirtualizing(this);
         if (hr != HResult.Ok)
         {
@@ -116,6 +120,33 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         // after virtualization is up so the command sink is safe to call.
         _ = changeWatcher?.StartAsync(CancellationToken.None);
         return true;
+    }
+
+    private bool EnsureBucketVersioningEnabled()
+    {
+        BucketVersioningStatus status;
+        try
+        {
+            status = backend.GetBucketVersioningStatusAsync(CancellationToken.None)
+                .GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex, "Failed to read bucket versioning state for {Bucket}", Options.S3Bucket);
+            return false;
+        }
+
+        if (status == BucketVersioningStatus.Enabled)
+        {
+            logger.LogInformation("Bucket versioning is enabled on {Bucket}.", Options.S3Bucket);
+            return true;
+        }
+
+        logger.LogError(
+            "Bucket versioning must be Enabled on {Bucket} (current: {Status}). Refusing to start.",
+            Options.S3Bucket, status);
+        return false;
     }
 
     public HResult StartDirectoryEnumerationCallback(

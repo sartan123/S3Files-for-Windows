@@ -38,6 +38,18 @@ itself runs as a normal user-mode process — no custom driver required.
 - AWS credentials reachable via the standard AWS SDK chain (environment
   variables, shared profile, IAM role, etc.)
 - An S3 bucket you have read/write access to
+- **Bucket versioning must be Enabled** on the target bucket. `s3files`
+  refuses to start otherwise: local file edits and deletes propagate to S3
+  as overwrites and `DeleteObject` calls, and versioning is what makes those
+  recoverable. The credentials must also allow `s3:GetBucketVersioning`.
+
+Enable versioning once with the AWS CLI:
+
+```powershell
+aws s3api put-bucket-versioning `
+  --bucket my-bucket `
+  --versioning-configuration Status=Enabled
+```
 
 Enable ProjFS once, in an elevated PowerShell session:
 
