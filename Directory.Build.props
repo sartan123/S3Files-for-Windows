@@ -13,10 +13,10 @@
         <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
 
         <!-- Assembly metadata -->
-        <Version>$(S3FilesVersion)</Version>
+        <Version>$(OsvfsVersion)</Version>
         <Authors>sartan123</Authors>
         <Company>sartan123</Company>
-        <Product>S3Files for Windows</Product>
+        <Product>OSVFS for Windows</Product>
         <Copyright>Copyright (c) sartan123</Copyright>
         <RepositoryUrl>https://github.com/sartan123/S3Files-for-Windows</RepositoryUrl>
         <RepositoryType>git</RepositoryType>

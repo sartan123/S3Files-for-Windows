@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Cross-platform library: hosts the object-store backends so they can be
+         referenced from Linux-runnable test projects (LocalStack via Testcontainers).
+         Override the net10.0-windows default in Directory.Build.props. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <Description>Cross-platform object-store backends used by the OSVFS Windows host.</Description>
+    <!-- Core itself is AOT-safe; AOT warnings for transitive AWSSDK references
+         are tolerated globally via WarningsNotAsErrors in Directory.Build.props. -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Match assembly names: the host project sets AssemblyName=osvfs. -->
+    <InternalsVisibleTo Include="osvfs" />
+    <InternalsVisibleTo Include="OSVFS.Core.UnitTests" />
+    <InternalsVisibleTo Include="OSVFS.Core.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

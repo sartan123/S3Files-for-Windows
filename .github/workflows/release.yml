@@ -66,23 +66,23 @@ jobs:
             nuget-${{ runner.os }}-
 
       - name: Restore (locked)
-        run: dotnet restore src/S3Files.Windows/S3Files.Windows.csproj --locked-mode
+        run: dotnet restore src/OSVFS.Windows/OSVFS.Windows.csproj --locked-mode
 
       - name: Publish (Native AOT, self-contained, win-x64)
         run: >
-          dotnet publish src/S3Files.Windows/S3Files.Windows.csproj
+          dotnet publish src/OSVFS.Windows/OSVFS.Windows.csproj
           --configuration Release
           --runtime win-x64
           --self-contained true
           --no-restore
-          -p:S3FilesVersion=${{ steps.ver.outputs.version }}
+          -p:OsvfsVersion=${{ steps.ver.outputs.version }}
           -p:ContinuousIntegrationBuild=true
           --output publish
 
       - name: Verify publish output
         shell: pwsh
         run: |
-          $exe = Join-Path 'publish' 's3files.exe'
+          $exe = Join-Path 'publish' 'osvfs.exe'
           if (-not (Test-Path $exe)) {
             Write-Error "Expected publish artifact '$exe' was not produced."
             exit 1
@@ -94,7 +94,7 @@ jobs:
         shell: pwsh
         run: |
           $version = '${{ steps.ver.outputs.version }}'
-          $zipName = "s3files-$version-win-x64.zip"
+          $zipName = "osvfs-$version-win-x64.zip"
           $zipPath = Join-Path (Get-Location) $zipName
 
           # Drop debug symbols from the release artifact. PDBs aren't required
@@ -132,7 +132,7 @@ jobs:
         # actions/upload-artifact@v4.6.2
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: s3files-${{ steps.ver.outputs.version }}-win-x64
+          name: osvfs-${{ steps.ver.outputs.version }}-win-x64
           path: |
             ${{ steps.pkg.outputs.zip-path }}
             ${{ steps.sha.outputs.sha-path }}
@@ -150,7 +150,7 @@ jobs:
 
           $args = @(
             'release', 'create', $tag, $zip, $sha,
-            '--title',          "S3Files for Windows $version",
+            '--title',          "OSVFS for Windows $version",
             '--generate-notes',
             '--verify-tag'
           )

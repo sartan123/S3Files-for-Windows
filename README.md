@@ -1,14 +1,16 @@
-# S3Files-for-Windows
+# OSVFS — Object Storage Virtual File System for Windows
 
 [日本語 README](./README.ja.md)
 
 [![CI](https://github.com/sartan123/S3Files-for-Windows/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sartan123/S3Files-for-Windows/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-A Windows port of the [AWS S3 Files][s3files] experience: mount an Amazon S3
-bucket as an ordinary local folder, with on-demand hydration and two-way
-synchronization. Built on top of [Windows Projected File System
-(ProjFS)][projfs].
+OSVFS mounts a cloud object-store bucket as an ordinary local folder on
+Windows, with on-demand hydration and two-way synchronization, modeled on the
+[AWS S3 Files][s3files] experience and built on top of [Windows Projected
+File System (ProjFS)][projfs]. The current build ships an Amazon S3 backend;
+the object-store abstraction is provider-neutral so additional providers
+(GCS / Azure Blob) can be added behind the same `--provider` flag.
 
 [s3files]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files.html
 [projfs]: https://learn.microsoft.com/en-us/windows/win32/projfs/projected-file-system
@@ -22,12 +24,13 @@ synchronized back to the bucket, and changes made directly to the bucket are
 reflected in the file system view. AWS implements this on top of EFS / NFS,
 so it is only available inside AWS-managed compute.
 
-`s3files` brings the same end-user experience to a Windows desktop. Objects
+`osvfs` brings the same end-user experience to a Windows desktop. Objects
 in the bucket appear as placeholders in Windows Explorer; their contents are
 downloaded the first time you open them. Local writes, deletes, and renames
-are propagated back to S3, and external changes to the bucket are picked up
-by a background poller. ProjFS is the kernel-mode component, and `s3files`
-itself runs as a normal user-mode process — no custom driver required.
+are propagated back to the object store, and external changes to the bucket
+are picked up by a background poller. ProjFS is the kernel-mode component,
+and `osvfs` itself runs as a normal user-mode process — no custom driver
+required.
 
 ## How to use
 
@@ -38,7 +41,7 @@ itself runs as a normal user-mode process — no custom driver required.
 - AWS credentials reachable via the standard AWS SDK chain (environment
   variables, shared profile, IAM role, etc.)
 - An S3 bucket you have read/write access to
-- **Bucket versioning must be Enabled** on the target bucket. `s3files`
+- **Bucket versioning must be Enabled** on the target bucket. `osvfs`
   refuses to start otherwise: local file edits and deletes propagate to S3
   as overwrites and `DeleteObject` calls, and versioning is what makes those
   recoverable. The credentials must also allow `s3:GetBucketVersioning`.
@@ -60,23 +63,25 @@ Enable-WindowsOptionalFeature -Online -FeatureName Client-ProjFS -All
 ### Run
 
 ```powershell
-s3files `
+osvfs `
+  --provider s3 `
   --bucket my-bucket `
-  --root-folder C:\Users\you\S3Files
+  --root-folder C:\Users\you\OSVFS
 ```
 
-Open `C:\Users\you\S3Files` in Explorer and the bucket contents appear.
+Open `C:\Users\you\OSVFS` in Explorer and the bucket contents appear.
 
 ### Command-line options
 
 | Option | Description | Default |
 | --- | --- | --- |
-| `--bucket` | S3 bucket to expose through the filesystem (required) | — |
+| `--provider` | Object-store provider backing the virtualization root. Currently `s3` is fully implemented; `gcs` / `azureblob` fail at startup. | `s3` |
+| `--bucket` | Bucket (S3/GCS) or container (Azure) to expose through the filesystem (required) | — |
 | `--root-folder` | Path to the virtualization root (required) | — |
 | `--endpoint-url` | Override the default S3 endpoint URL (e.g. for LocalStack / MinIO) | AWS default |
 | `--region` | AWS region (e.g. `us-east-1`, `ap-northeast-1`). When omitted, the SDK falls back to the standard region resolution chain (env vars, profile, IMDS). | — |
 | `--prefix` | Optional key prefix within the bucket. When set, only objects under this prefix are projected into the virtualization root. | — |
-| `--sync-interval-seconds` | Polling interval for detecting external S3 changes; `0` disables | `30` |
+| `--sync-interval-seconds` | Polling interval for detecting external object-store changes; `0` disables | `30` |
 | `--verbose` | Enable debug-level logging | off |
 
 To project only a sub-tree of a bucket — for example `s3://my-bucket/team-a/` —
@@ -87,12 +92,13 @@ invisible.
 
 ## Architecture
 
-`s3files` is modeled directly on AWS [S3 Files][s3files]. AWS provides the
+`osvfs` is modeled directly on AWS [S3 Files][s3files]. AWS provides the
 "bucket as a file system" experience by exposing an EFS-backed file system
 over NFS to AWS-managed compute. This project provides the equivalent
 experience on a Windows desktop by implementing a ProjFS provider in user
-space — `PrjFlt.sys` is the kernel side, and `s3files` is the provider that
-hydrates entries from S3 and propagates local changes back.
+space — `PrjFlt.sys` is the kernel side, and `osvfs` is the provider that
+hydrates entries from the configured object store and propagates local
+changes back.
 
 ```
  ┌─────────────────────┐  StartDirectoryEnumeration / GetPlaceholderInfo
@@ -102,7 +108,7 @@ hydrates entries from S3 and propagates local changes back.
            │ placeholders                                   ▼
            │ + hydrated bytes                    ┌─────────────────────┐
  ┌─────────▼───────────┐  WriteFileData /        │  ProjFsProvider     │
- │  C:\…\S3Files       │  WritePlaceholderInfo   │  (IRequiredCallbacks)│
+ │  C:\…\OSVFS         │  WritePlaceholderInfo   │  (IRequiredCallbacks)│
  │  (virtualization    │ ←──────────────────────│                     │
  │   root)             │                         └────┬──────┬─────────┘
  └─────────┬───────────┘                              │      │ AWS SDK
@@ -120,26 +126,27 @@ hydrates entries from S3 and propagates local changes back.
 
 Roughly:
 
-- [`ProjFsProvider`](src/S3Files.Windows/ProjFs/ProjFsProvider.cs) implements
+- [`ProjFsProvider`](src/OSVFS.Windows/ProjFs/ProjFsProvider.cs) implements
   `IRequiredCallbacks` from the managed ProjFS wrapper. Directory enumeration,
   placeholder metadata, and on-demand hydration all flow through here.
-- [`NotificationCallbacks`](src/S3Files.Windows/ProjFs/NotificationCallbacks.cs)
+- [`NotificationCallbacks`](src/OSVFS.Windows/ProjFs/NotificationCallbacks.cs)
   receives ProjFS notifications for local writes / deletes / renames and
-  forwards them to the S3 backend.
-- [`S3Backend`](src/S3Files.Windows.Core/S3/S3Backend.cs) wraps AWSSDK.S3 with
-  the small, ProjFS-shaped surface the provider needs (list, head, range
-  read, upload, delete, rename-by-copy). Uploads above 8 MiB are routed
+  forwards them to the object-store backend.
+- [`S3Backend`](src/OSVFS.Core/ObjectStore/S3/S3Backend.cs) wraps AWSSDK.S3
+  behind the provider-neutral [`IObjectStoreBackend`](src/OSVFS.Core/ObjectStore/IObjectStoreBackend.cs)
+  with the small, ProjFS-shaped surface the provider needs (list, head,
+  range read, upload, delete, rename-by-copy). Uploads above 8 MiB are routed
   through `TransferUtility` so large files are split into 5 MiB parts and
   uploaded in parallel. It lives in a cross-platform Core library so
   integration tests can run against LocalStack on Linux without pulling in
   the Windows-only ProjFS bindings. When `--prefix` is set, the backend
   transparently rewrites virtualization-root-relative paths into the
   full bucket key (`<prefix>/<path>`) on every API call.
-- [`S3ChangeWatcher`](src/S3Files.Windows.Core/Sync/S3ChangeWatcher.cs)
+- [`ObjectStoreChangeWatcher`](src/OSVFS.Core/Sync/ObjectStoreChangeWatcher.cs)
   periodically re-lists the bucket, diffs against an in-memory snapshot, and
-  pushes external changes back into ProjFS. As in AWS S3 Files, the S3 bucket
-  is treated as the source of truth: if a remote change collides with an
-  unsynced local edit, the local copy is moved to a `.s3files-lost+found`
+  pushes external changes back into ProjFS. As in AWS S3 Files, the object
+  store is treated as the source of truth: if a remote change collides with
+  an unsynced local edit, the local copy is moved to a `.osvfs-lost+found`
   quarantine directory.
 
 ## Building
@@ -157,32 +164,32 @@ Roughly:
 ### Debug build
 
 ```powershell
-dotnet build S3Files.Windows.slnx -c Debug
-dotnet run --project src\S3Files.Windows -- --bucket my-bucket --root-folder C:\Users\you\S3Files
+dotnet build OSVFS.slnx -c Debug
+dotnet run --project src\OSVFS.Windows -- --bucket my-bucket --root-folder C:\Users\you\OSVFS
 ```
 
 ### Release build (Native AOT, single binary)
 
 ```powershell
-dotnet publish src\S3Files.Windows -c Release -r win-x64 -o publish\win-x64
+dotnet publish src\OSVFS.Windows -c Release -r win-x64 -o publish\win-x64
 ```
 
-The output is a self-contained `s3files.exe`. End users do **not** need the
+The output is a self-contained `osvfs.exe`. End users do **not** need the
 .NET runtime installed.
 
 ### Tests
 
 ```powershell
 # Unit tests (Windows or Linux)
-dotnet test tests\S3Files.Windows.UnitTests
+dotnet test tests\OSVFS.Core.UnitTests
 
 # Integration tests against LocalStack (requires Docker)
-dotnet test tests\S3Files.Windows.IntegrationTests
+dotnet test tests\OSVFS.Core.IntegrationTests
 ```
 
 The integration test project targets `net10.0` and only references the
-cross-platform `S3Files.Windows.Core` library, so it can run on Linux CI
-runners against [LocalStack](https://github.com/localstack/localstack) via
+cross-platform `OSVFS.Core` library, so it can run on Linux CI runners
+against [LocalStack](https://github.com/localstack/localstack) via
 [Testcontainers](https://dotnet.testcontainers.org/).
 
 ## Why C# / .NET?
@@ -201,14 +208,14 @@ specific reasons:
    filesystem provider has tight latency requirements: every directory
    listing and every byte of `GetFileData` is on the user's hot path.
    Publishing with `PublishAot=true` produces a single, statically compiled
-   `s3files.exe` with no JIT, no ReadyToRun, and no managed runtime install
+   `osvfs.exe` with no JIT, no ReadyToRun, and no managed runtime install
    on the end user's machine — the startup and per-call cost is comparable
-   to a native binary while we keep C#'s ergonomics for the AWS SDK and the
-   ProjFS callbacks.
+   to a native binary while we keep C#'s ergonomics for the cloud SDKs and
+   the ProjFS callbacks.
 
-The cross-platform pieces (`S3Files.Windows.Core`) target plain `net10.0`
-and stay AOT-compatible (`IsAotCompatible=true`), which is what lets
-LocalStack-based integration tests run on Linux CI.
+The cross-platform pieces (`OSVFS.Core`) target plain `net10.0` and stay
+AOT-compatible (`IsAotCompatible=true`), which is what lets LocalStack-based
+integration tests run on Linux CI.
 
 [projfs-nuget]: https://www.nuget.org/packages/Microsoft.Windows.ProjFS
 [simple-provider]: https://github.com/microsoft/ProjFS-Managed-API

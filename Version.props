@@ -1,7 +1,7 @@
 <Project>
 
   <PropertyGroup>
-    <S3FilesVersion Condition="'$(S3FilesVersion)' == ''" >0.0.1</S3FilesVersion>
+    <OsvfsVersion Condition="'$(OsvfsVersion)' == ''" >0.0.1</OsvfsVersion>
   </PropertyGroup>
 
 </Project>

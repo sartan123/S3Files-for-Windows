@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>osvfs</AssemblyName>
+    <Description>OSVFS for Windows: mount an object-store bucket as a local folder via ProjFS.</Description>
+
+    <!-- Publish target: x64 Native AOT, self-contained -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <SelfContained>true</SelfContained>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <VerifyReferenceAotCompatibility>true</VerifyReferenceAotCompatibility>
+    <OptimizationPreference>Speed</OptimizationPreference>
+
+    <!-- AOT size reduction (safe for this CLI) -->
+    <EventSourceSupport>false</EventSourceSupport>
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <!--
+      Leave InvariantGlobalization=false: object-store keys may be compared with culture-aware
+      semantics and AWSSDK / Console output rely on CultureInfo features.
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Microsoft.Windows.ProjFS" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OSVFS.Core\OSVFS.Core.csproj" />
+  </ItemGroup>
+
+</Project>

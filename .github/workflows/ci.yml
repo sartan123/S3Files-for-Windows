@@ -52,14 +52,14 @@ jobs:
             nuget-${{ runner.os }}-
 
       - name: Restore (locked)
-        run: dotnet restore S3Files.Windows.slnx --locked-mode
+        run: dotnet restore OSVFS.slnx --locked-mode
 
       - name: Build (Release)
-        run: dotnet build S3Files.Windows.slnx --configuration Release --no-restore
+        run: dotnet build OSVFS.slnx --configuration Release --no-restore
 
       - name: Unit tests
         run: >
-          dotnet test tests/S3Files.Windows.UnitTests/S3Files.Windows.UnitTests.csproj
+          dotnet test tests/OSVFS.Core.UnitTests/OSVFS.Core.UnitTests.csproj
           --configuration Release
           --no-build
           --logger "trx;LogFileName=unit.trx"
@@ -107,17 +107,17 @@ jobs:
       # IntegrationTests). The Windows host project pulls in Microsoft.Windows.ProjFS
       # which is not buildable on Linux, but it is not referenced from these tests.
       - name: Restore (locked)
-        run: dotnet restore tests/S3Files.Windows.IntegrationTests/S3Files.Windows.IntegrationTests.csproj --locked-mode
+        run: dotnet restore tests/OSVFS.Core.IntegrationTests/OSVFS.Core.IntegrationTests.csproj --locked-mode
 
       - name: Build integration tests (Release)
         run: >
-          dotnet build tests/S3Files.Windows.IntegrationTests/S3Files.Windows.IntegrationTests.csproj
+          dotnet build tests/OSVFS.Core.IntegrationTests/OSVFS.Core.IntegrationTests.csproj
           --configuration Release
           --no-restore
 
       - name: Integration tests
         run: >
-          dotnet test tests/S3Files.Windows.IntegrationTests/S3Files.Windows.IntegrationTests.csproj
+          dotnet test tests/OSVFS.Core.IntegrationTests/OSVFS.Core.IntegrationTests.csproj
           --configuration Release
           --no-build
           --logger "trx;LogFileName=integration.trx"
