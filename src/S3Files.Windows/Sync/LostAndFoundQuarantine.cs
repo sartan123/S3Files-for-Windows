@@ -7,7 +7,7 @@ namespace S3Files.Windows.Sync.ProjFs;
 /// <summary>
 /// File-system implementation of <see cref="ILostAndFoundQuarantine"/>. Copies the dirty local
 /// copy into a sibling lost+found directory beneath the virtualization root before the watcher
-/// replaces it with the S3 version.
+/// replaces it with the remote (authoritative) version.
 /// </summary>
 internal sealed class LostAndFoundQuarantine(
     string syncRootPath,
@@ -15,7 +15,7 @@ internal sealed class LostAndFoundQuarantine(
     : ILostAndFoundQuarantine
 {
     private readonly string lostAndFoundDir =
-        Path.Combine(syncRootPath, S3ChangeWatcher.LostAndFoundDirectoryName);
+        Path.Combine(syncRootPath, ObjectStoreChangeWatcher.LostAndFoundDirectoryName);
     private readonly string syncRootPath = syncRootPath;
 
     /// <inheritdoc/>

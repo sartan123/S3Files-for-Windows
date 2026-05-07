@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using S3Files.Windows.S3;
+using S3Files.Windows.ObjectStore;
 using S3Files.Windows.Sync;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
@@ -7,7 +7,7 @@ using Xunit;
 
 namespace S3Files.Windows.UnitTests;
 
-public sealed class S3ChangeWatcherTests
+public sealed class ObjectStoreChangeWatcherTests
 {
     [Fact]
     public async Task Poll_with_no_changes_invokes_no_commands()
@@ -96,7 +96,7 @@ public sealed class S3ChangeWatcherTests
         await watcher.PollOnceAsync(CancellationToken.None);
 
         // Spec: the dirty local copy goes to lost+found, then the placeholder is force-deleted
-        // and re-created with the S3 version.
+        // and re-created with the remote version.
         Assert.Equal(new[] { "conflict.txt" }, quarantine.Quarantined);
 
         Assert.Collection(
@@ -130,7 +130,7 @@ public sealed class S3ChangeWatcherTests
             sink.Calls,
             c => { Assert.Equal("DeleteFile", c.Op); Assert.False(c.AllowDirty); },
             c => { Assert.Equal("DeleteFile", c.Op); Assert.True(c.AllowDirty); });
-        // No placeholder re-creation: object is gone in S3.
+        // No placeholder re-creation: object is gone in the remote store.
     }
 
     [Fact]
@@ -162,7 +162,7 @@ public sealed class S3ChangeWatcherTests
         var watcher = NewWatcher(backend, sink, new RecordingQuarantine());
         await watcher.PrimeSnapshotAsync(CancellationToken.None);
 
-        // S3 ETag changed (because we are mid-upload), but our local-change token tells the
+        // Remote ETag changed (because we are mid-upload), but our local-change token tells the
         // watcher to ignore this key for the current cycle.
         backend.Set("inflight.txt", "etag-new", 2);
         using (var _ = watcher.BeginLocalKeyChange("inflight.txt"))
@@ -185,7 +185,7 @@ public sealed class S3ChangeWatcherTests
         var watcher = NewWatcher(backend, sink, new RecordingQuarantine());
         await watcher.PrimeSnapshotAsync(CancellationToken.None);
 
-        // Local prefix delete: pretend we removed "dir/" from S3.
+        // Local prefix delete: pretend we removed "dir/" from the backend.
         backend.Remove("dir/a.txt");
         backend.Remove("dir/sub/b.txt");
         watcher.RecordLocalDeletePrefix("dir");
@@ -216,29 +216,29 @@ public sealed class S3ChangeWatcherTests
         Assert.Empty(sink.Calls);
     }
 
-    private static S3ChangeWatcher NewWatcher(
-        IS3Backend backend, IProjFsCommandSink sink, ILostAndFoundQuarantine quarantine)
+    private static ObjectStoreChangeWatcher NewWatcher(
+        IObjectStoreBackend backend, IProjFsCommandSink sink, ILostAndFoundQuarantine quarantine)
     {
-        return new S3ChangeWatcher(
+        return new ObjectStoreChangeWatcher(
             backend,
             sink,
             quarantine,
             interval: TimeSpan.Zero, // disable background loop; tests drive PollOnceAsync directly
-            logger: NullLogger<S3ChangeWatcher>.Instance);
+            logger: NullLogger<ObjectStoreChangeWatcher>.Instance);
     }
 
     // ---- Test doubles -----------------------------------------------------------------
 
-    private sealed class FakeBackend : IS3Backend
+    private sealed class FakeBackend : IObjectStoreBackend
     {
-        private readonly ConcurrentDictionary<string, S3ObjectInfo> objects =
+        private readonly ConcurrentDictionary<string, ObjectInfo> objects =
             new(StringComparer.Ordinal);
 
         public void Set(string key, string etag, long size, DateTimeOffset lastModified = default)
         {
-            objects[key] = new S3ObjectInfo(
+            objects[key] = new ObjectInfo(
                 Key: key,
-                RelativePath: S3Util.ToRelativePath(key),
+                RelativePath: KeyPath.ToRelativePath(key),
                 Size: size,
                 LastModified: lastModified == default ? DateTimeOffset.UtcNow : lastModified,
                 ETag: etag,
@@ -247,10 +247,10 @@ public sealed class S3ChangeWatcherTests
 
         public void Remove(string key) => objects.TryRemove(key, out _);
 
-        public IAsyncEnumerable<S3ObjectInfo> ListAllAsync(CancellationToken ct) =>
+        public IAsyncEnumerable<ObjectInfo> ListAllAsync(CancellationToken ct) =>
             EnumerateAsync(ct);
 
-        private async IAsyncEnumerable<S3ObjectInfo> EnumerateAsync(
+        private async IAsyncEnumerable<ObjectInfo> EnumerateAsync(
             [EnumeratorCancellation] CancellationToken ct)
         {
             foreach (var kv in objects.ToArray())
@@ -262,13 +262,13 @@ public sealed class S3ChangeWatcherTests
         }
 
         // Unused by the watcher.
-        public IAsyncEnumerable<S3ObjectInfo> ListAsync(string r, CancellationToken c) =>
+        public IAsyncEnumerable<ObjectInfo> ListAsync(string r, CancellationToken c) =>
             throw new NotImplementedException();
-        public IAsyncEnumerable<S3ObjectInfo> ListRecursiveAsync(string r, CancellationToken c) =>
+        public IAsyncEnumerable<ObjectInfo> ListRecursiveAsync(string r, CancellationToken c) =>
             throw new NotImplementedException();
         public Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken c) =>
             throw new NotImplementedException();
-        public Task<S3ObjectInfo?> HeadAsync(string r, CancellationToken c) =>
+        public Task<ObjectInfo?> HeadAsync(string r, CancellationToken c) =>
             throw new NotImplementedException();
         public Task ReadRangeAsync(string r, long o, long l, Stream d, CancellationToken c) =>
             throw new NotImplementedException();
@@ -282,6 +282,8 @@ public sealed class S3ChangeWatcherTests
             throw new NotImplementedException();
         public Task RenamePrefixAsync(string a, string b, CancellationToken c) =>
             throw new NotImplementedException();
+
+        public void Dispose() { }
     }
 
     private sealed record SinkCall(string Op, string Path, long Size, bool AllowDirty);

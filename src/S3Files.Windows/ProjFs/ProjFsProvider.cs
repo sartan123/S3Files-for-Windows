@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Windows.ProjFS;
-using S3Files.Windows.S3;
+using S3Files.Windows.ObjectStore;
 using S3Files.Windows.Sync;
 using S3Files.Windows.Sync.ProjFs;
 using System.Collections.Concurrent;
@@ -9,8 +9,8 @@ using System.Collections.Concurrent;
 namespace S3Files.Windows.ProjFs;
 
 /// <summary>
-/// ProjFS callback host that bridges the virtualization instance to the S3 backend
-/// and the change watcher. Owns the lifetime of every long-lived collaborator.
+/// ProjFS callback host that bridges the virtualization instance to the object-store
+/// backend and the change watcher. Owns the lifetime of every long-lived collaborator.
 /// </summary>
 internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
 {
@@ -23,10 +23,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     private readonly ILoggerFactory loggerFactory;
     private readonly string syncRootPath;
     private readonly VirtualizationInstance virtualizationInstance;
-    private readonly S3Backend backend;
+    private readonly IObjectStoreBackend backend;
     private readonly ConcurrentDictionary<Guid, DirectoryEnumerationSession> activeEnumerations = new();
     private readonly NotificationCallbacks notificationCallbacks;
-    private readonly S3ChangeWatcher? changeWatcher;
+    private readonly ObjectStoreChangeWatcher? changeWatcher;
 
     private bool virtualizationInstanceStarted;
 
@@ -56,7 +56,12 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         this.logger = logger;
         this.loggerFactory = loggerFactory;
         syncRootPath = options.VirtRoot;
-        backend = new S3Backend(options.S3Bucket, options.EndpointUrl, options.KeyPrefix, options.Region);
+        backend = ObjectStoreBackendFactory.Create(
+            options.Provider,
+            options.Bucket,
+            options.EndpointUrl,
+            options.KeyPrefix,
+            options.Region);
 
         EnsureVirtualizationRoot();
 
@@ -161,19 +166,19 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         catch (Exception ex)
         {
             logger.LogError(
-                ex, "Failed to read bucket versioning state for {Bucket}", Options.S3Bucket);
+                ex, "Failed to read bucket versioning state for {Bucket}", Options.Bucket);
             return false;
         }
 
         if (status == BucketVersioningStatus.Enabled)
         {
-            logger.LogInformation("Bucket versioning is enabled on {Bucket}.", Options.S3Bucket);
+            logger.LogInformation("Bucket versioning is enabled on {Bucket}.", Options.Bucket);
             return true;
         }
 
         logger.LogError(
             "Bucket versioning must be Enabled on {Bucket} (current: {Status}). Refusing to start.",
-            Options.S3Bucket, status);
+            Options.Bucket, status);
         return false;
     }
 
@@ -248,7 +253,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
 
     /// <summary>
     /// ProjFS callback: writes a placeholder for <paramref name="relativePath"/>
-    /// based on the S3 HEAD response, returning FileNotFound when the object is absent.
+    /// based on the backend HEAD response, returning FileNotFound when the object is absent.
     /// </summary>
     public HResult GetPlaceholderInfoCallback(
         int commandId,
@@ -277,7 +282,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
                 fileAttributes: attrs,
                 endOfFile: size,
                 isDirectory: isDirectory,
-                contentId: S3Util.BuildContentId(etag),
+                contentId: KeyPath.BuildContentId(etag),
                 providerId: ProviderId);
         }
         catch (Exception ex)
@@ -288,7 +293,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     }
 
     /// <summary>
-    /// ProjFS callback: streams a byte range from S3 into the virtualization
+    /// ProjFS callback: streams a byte range from the backend into the virtualization
     /// instance's write buffer to hydrate the placeholder.
     /// </summary>
     public HResult GetFileDataCallback(
@@ -318,8 +323,8 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     }
 
     /// <summary>
-    /// Notification handler: uploads a locally-modified file to S3 and records the
-    /// new ETag with the change watcher.
+    /// Notification handler: uploads a locally-modified file to the backend and records
+    /// the new ETag with the change watcher.
     /// </summary>
     public void HandleFileModified(string relativePath, bool isDirectory)
     {
@@ -333,8 +338,8 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             return;
         }
 
-        var s3Key = S3Util.ToS3Key(relativePath);
-        using var _ = changeWatcher?.BeginLocalKeyChange(s3Key);
+        var objectKey = KeyPath.ToObjectKey(relativePath);
+        using var _ = changeWatcher?.BeginLocalKeyChange(objectKey);
 
         try
         {
@@ -348,7 +353,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
 
             var result = backend.UploadAsync(relativePath, stream, ifMatchETag: null, CancellationToken.None)
                 .GetAwaiter().GetResult();
-            changeWatcher?.RecordLocalUpload(s3Key, result.ETag, result.Size, result.LastModified);
+            changeWatcher?.RecordLocalUpload(objectKey, result.ETag, result.Size, result.LastModified);
 
             logger.LogInformation("Uploaded {RelativePath} ({Size} bytes)", relativePath, stream.Length);
         }
@@ -363,7 +368,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     }
 
     /// <summary>
-    /// Notification handler: deletes the corresponding S3 object (or whole prefix
+    /// Notification handler: deletes the corresponding remote object (or whole prefix
     /// for directories) after a local delete.
     /// </summary>
     public void HandleFileDeleted(string relativePath, bool isDirectory)
@@ -371,24 +376,24 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         if (Options.ReadOnly || string.IsNullOrEmpty(relativePath)) return;
         if (IsInLostAndFound(relativePath)) return;
 
-        var s3Key = S3Util.ToS3Key(relativePath);
+        var objectKey = KeyPath.ToObjectKey(relativePath);
 
         try
         {
             if (isDirectory)
             {
-                using var _ = changeWatcher?.BeginLocalPrefixChange(s3Key);
+                using var _ = changeWatcher?.BeginLocalPrefixChange(objectKey);
                 backend.DeletePrefixAsync(relativePath, CancellationToken.None)
                     .GetAwaiter().GetResult();
-                changeWatcher?.RecordLocalDeletePrefix(s3Key);
+                changeWatcher?.RecordLocalDeletePrefix(objectKey);
                 logger.LogInformation("Deleted prefix {RelativePath}/", relativePath);
             }
             else
             {
-                using var _ = changeWatcher?.BeginLocalKeyChange(s3Key);
+                using var _ = changeWatcher?.BeginLocalKeyChange(objectKey);
                 backend.DeleteAsync(relativePath, CancellationToken.None)
                     .GetAwaiter().GetResult();
-                changeWatcher?.RecordLocalDelete(s3Key);
+                changeWatcher?.RecordLocalDelete(objectKey);
                 logger.LogInformation("Deleted {RelativePath}", relativePath);
             }
         }
@@ -399,7 +404,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     }
 
     /// <summary>
-    /// Notification handler: renames the corresponding S3 object or prefix and
+    /// Notification handler: renames the corresponding remote object or prefix and
     /// updates the watcher's snapshot.
     /// </summary>
     public void HandleFileRenamed(string oldRelativePath, string newRelativePath, bool isDirectory)
@@ -408,8 +413,8 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         if (string.IsNullOrEmpty(oldRelativePath) || string.IsNullOrEmpty(newRelativePath)) return;
         if (IsInLostAndFound(oldRelativePath) || IsInLostAndFound(newRelativePath)) return;
 
-        var oldKey = S3Util.ToS3Key(oldRelativePath);
-        var newKey = S3Util.ToS3Key(newRelativePath);
+        var oldKey = KeyPath.ToObjectKey(oldRelativePath);
+        var newKey = KeyPath.ToObjectKey(newRelativePath);
 
         try
         {
@@ -441,36 +446,36 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
 
     /// <summary>
     /// True when the path resides in the lost+found directory; activity there is
-    /// internal bookkeeping and must never be propagated back to S3.
+    /// internal bookkeeping and must never be propagated back to the remote store.
     /// </summary>
     private static bool IsInLostAndFound(string relativePath) =>
         relativePath.StartsWith(
-            S3ChangeWatcher.LostAndFoundDirectoryName + "\\",
+            ObjectStoreChangeWatcher.LostAndFoundDirectoryName + "\\",
             StringComparison.OrdinalIgnoreCase)
         || string.Equals(
             relativePath,
-            S3ChangeWatcher.LostAndFoundDirectoryName,
+            ObjectStoreChangeWatcher.LostAndFoundDirectoryName,
             StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Builds the change watcher and its collaborators, or returns null when the
     /// configuration disables it (read-only mode or non-positive interval).
     /// </summary>
-    private S3ChangeWatcher? CreateChangeWatcher()
+    private ObjectStoreChangeWatcher? CreateChangeWatcher()
     {
         if (Options.ReadOnly)
         {
             // Read-only mode is for inspection scenarios — we still want to surface external
-            // S3 changes, but conflict resolution requires write access to lost+found, so we
-            // gate the whole watcher off for the simplest correct first impl.
-            logger.LogInformation("Read-only mode: S3 change watcher disabled.");
+            // remote changes, but conflict resolution requires write access to lost+found, so
+            // we gate the whole watcher off for the simplest correct first impl.
+            logger.LogInformation("Read-only mode: object-store change watcher disabled.");
             return null;
         }
 
         if (Options.SyncIntervalSeconds <= 0)
         {
             logger.LogInformation(
-                "Sync interval is {Interval}s; S3 change watcher disabled.",
+                "Sync interval is {Interval}s; object-store change watcher disabled.",
                 Options.SyncIntervalSeconds);
             return null;
         }
@@ -483,12 +488,12 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             syncRootPath,
             loggerFactory.CreateLogger<LostAndFoundQuarantine>());
 
-        return new S3ChangeWatcher(
+        return new ObjectStoreChangeWatcher(
             backend,
             sink,
             quarantine,
             TimeSpan.FromSeconds(Options.SyncIntervalSeconds),
-            loggerFactory.CreateLogger<S3ChangeWatcher>());
+            loggerFactory.CreateLogger<ObjectStoreChangeWatcher>());
     }
 
     /// <summary>
@@ -515,9 +520,9 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     /// <summary>
     /// Materializes the immediate-children listing for an enumeration session.
     /// </summary>
-    private async Task<List<S3ObjectInfo>> ListDirectoryAsync(string relativePath)
+    private async Task<List<ObjectInfo>> ListDirectoryAsync(string relativePath)
     {
-        var list = new List<S3ObjectInfo>();
+        var list = new List<ObjectInfo>();
         await foreach (var entry in backend.ListAsync(relativePath, CancellationToken.None).ConfigureAwait(false))
         {
             list.Add(entry);

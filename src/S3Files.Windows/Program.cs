@@ -1,14 +1,21 @@
 using Microsoft.Extensions.Logging;
 using System.CommandLine;
 using S3Files.Windows;
+using S3Files.Windows.ObjectStore;
 using S3Files.Windows.ProjFs;
 
 const int ExitSuccess = 0;
 const int ExitGeneralException = 2;
 
+var providerOption = new Option<ObjectStoreProvider>("--provider")
+{
+    Description = "Object-store provider backing the virtualization root. Currently only 's3' is fully implemented; 'gcs' and 'azureblob' fail at startup.",
+    DefaultValueFactory = _ => ObjectStoreProvider.S3,
+};
+
 var bucketOption = new Option<string>("--bucket")
 {
-    Description = "S3 bucket that will be accessible through the file system.",
+    Description = "Bucket (S3/GCS) or container (Azure) that will be accessible through the file system.",
     Required = true,
 };
 
@@ -50,8 +57,9 @@ var syncIntervalOption = new Option<int>("--sync-interval-seconds")
     DefaultValueFactory = _ => 30,
 };
 
-var rootCommand = new RootCommand("Windows port of AWS S3 Files: mount an Amazon S3 bucket as a local folder via ProjFS.")
+var rootCommand = new RootCommand("Windows port of AWS S3 Files: mount a cloud object-store bucket/container as a local folder via ProjFS.")
 {
+    providerOption,
     bucketOption,
     rootFolderOption,
     endpointUrlOption,
@@ -66,7 +74,8 @@ rootCommand.SetAction(parseResult =>
 {
     var options = new ProjFsProviderOptions
     {
-        S3Bucket = parseResult.GetValue(bucketOption)!,
+        Provider = parseResult.GetValue(providerOption),
+        Bucket = parseResult.GetValue(bucketOption)!,
         VirtRoot = parseResult.GetValue(rootFolderOption)!,
         EndpointUrl = parseResult.GetValue(endpointUrlOption),
         Region = parseResult.GetValue(regionOption),
@@ -110,7 +119,7 @@ static int RunProvider(ProjFsProviderOptions options, ILoggerFactory loggerFacto
         return ExitGeneralException;
     }
 
-    logger.LogInformation("Virtualizing s3://{Bucket} at {Root}", options.S3Bucket, options.VirtRoot);
+    logger.LogInformation("Virtualizing s3://{Bucket} at {Root}", options.Bucket, options.VirtRoot);
     logger.LogInformation("Press Enter to exit.");
     Console.ReadLine();
     return ExitSuccess;

@@ -1,6 +1,7 @@
 using Amazon.S3;
 using Amazon.S3.Model;
-using S3Files.Windows.S3;
+using S3Files.Windows.ObjectStore;
+using S3Files.Windows.ObjectStore.S3;
 using Xunit;
 
 namespace S3Files.Windows.IntegrationTests;
@@ -8,7 +9,7 @@ namespace S3Files.Windows.IntegrationTests;
 /// <summary>
 /// Verifies that an S3Backend constructed with a key prefix scopes every operation to that
 /// prefix: lists ignore objects outside it, reads/writes go to keys under it, and the
-/// returned S3ObjectInfo carries prefix-relative keys so downstream consumers (e.g. the
+/// returned ObjectInfo carries prefix-relative keys so downstream consumers (e.g. the
 /// change-watcher snapshot) stay correctly keyed.
 /// </summary>
 [Collection(LocalStackCollection.Name)]
@@ -88,7 +89,7 @@ public sealed class S3BackendPrefixTests : IAsyncLifetime
         await PutAtRawKeyAsync("sibling/c.txt", "c"u8.ToArray());
         await PutAtRawKeyAsync("other.txt", "o"u8.ToArray());
 
-        var entries = new List<S3ObjectInfo>();
+        var entries = new List<ObjectInfo>();
         await foreach (var e in backend.ListAsync(string.Empty, CancellationToken.None))
         {
             entries.Add(e);

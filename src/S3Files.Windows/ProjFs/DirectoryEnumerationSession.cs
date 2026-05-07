@@ -1,5 +1,5 @@
 using Microsoft.Windows.ProjFS;
-using S3Files.Windows.S3;
+using S3Files.Windows.ObjectStore;
 
 /// <summary>
 /// Per-enumeration cursor that holds the sorted child list, current filter, and
@@ -7,7 +7,7 @@ using S3Files.Windows.S3;
 /// </summary>
 internal sealed class DirectoryEnumerationSession
 {
-    private readonly List<S3ObjectInfo> entries;
+    private readonly List<ObjectInfo> entries;
     private string filter = "*";
     private bool filterSet;
     private int index;
@@ -16,7 +16,7 @@ internal sealed class DirectoryEnumerationSession
     /// Stores the entries and pre-sorts them with ProjFS's filename comparer so the
     /// listing order is consistent with what NTFS would return.
     /// </summary>
-    public DirectoryEnumerationSession(List<S3ObjectInfo> entries)
+    public DirectoryEnumerationSession(List<ObjectInfo> entries)
     {
         this.entries = entries;
         this.entries.Sort(static (a, b) => Utils.FileNameCompare(GetLeafName(a), GetLeafName(b)));
@@ -48,7 +48,7 @@ internal sealed class DirectoryEnumerationSession
     /// Advances past non-matching entries and returns the next match; false when
     /// the listing is exhausted.
     /// </summary>
-    public bool TryGetCurrent(out S3ObjectInfo entry, out string leafName)
+    public bool TryGetCurrent(out ObjectInfo entry, out string leafName)
     {
         while (index < entries.Count)
         {
@@ -75,7 +75,7 @@ internal sealed class DirectoryEnumerationSession
     /// <summary>
     /// Extracts the leaf name from a backslash-separated relative path.
     /// </summary>
-    private static string GetLeafName(S3ObjectInfo info)
+    private static string GetLeafName(ObjectInfo info)
     {
         var slash = info.RelativePath.LastIndexOf('\\');
         return slash >= 0 ? info.RelativePath[(slash + 1)..] : info.RelativePath;

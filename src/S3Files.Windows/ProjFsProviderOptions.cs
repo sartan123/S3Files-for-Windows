@@ -1,3 +1,5 @@
+using S3Files.Windows.ObjectStore;
+
 namespace S3Files.Windows;
 
 /// <summary>
@@ -7,9 +9,14 @@ namespace S3Files.Windows;
 internal sealed class ProjFsProviderOptions
 {
     /// <summary>
-    /// Name of the S3 bucket projected into the virtualization root.
+    /// Object-store provider backing the virtualization root.
     /// </summary>
-    public required string S3Bucket { get; init; }
+    public ObjectStoreProvider Provider { get; init; } = ObjectStoreProvider.S3;
+
+    /// <summary>
+    /// Name of the bucket/container projected into the virtualization root.
+    /// </summary>
+    public required string Bucket { get; init; }
 
     /// <summary>
     /// Local directory marked as the ProjFS virtualization root.
@@ -22,7 +29,7 @@ internal sealed class ProjFsProviderOptions
     public string? EndpointUrl { get; init; }
 
     /// <summary>
-    /// Optional AWS region; falls back to the SDK's standard resolution chain when null.
+    /// Optional region; falls back to the SDK's standard resolution chain when null.
     /// </summary>
     public string? Region { get; init; }
 

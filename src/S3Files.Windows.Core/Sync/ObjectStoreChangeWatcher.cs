@@ -1,15 +1,17 @@
 using Microsoft.Extensions.Logging;
-using S3Files.Windows.S3;
+using S3Files.Windows.ObjectStore;
 using System.Collections.Concurrent;
 
 namespace S3Files.Windows.Sync;
 
 /// <summary>
-/// Periodically reconciles the linked S3 bucket against an in-memory snapshot to discover
-/// objects that other applications have added, modified, or deleted, and reflects those
-/// changes through ProjFS. Implements the "Changes in your S3 bucket automatically appear
-/// in your file system" behavior described in the S3 Files spec, including the
-/// "S3 bucket is the source of truth" conflict policy.
+/// Periodically reconciles the linked object-store bucket/container against an in-memory
+/// snapshot to discover objects that other applications have added, modified, or deleted,
+/// and reflects those changes through ProjFS. Implements the "Changes in your bucket
+/// automatically appear in your file system" behavior described in the AWS S3 Files spec,
+/// including the "remote bucket is the source of truth" conflict policy. The same machinery
+/// applies unchanged to GCS and Azure Blob backends once they implement
+/// <see cref="IObjectStoreBackend"/>.
 /// </summary>
 /// <remarks>
 /// The AWS-managed S3 Files service uses S3 Event Notifications (SNS/SQS) for near-real-time
@@ -17,7 +19,7 @@ namespace S3Files.Windows.Sync;
 /// requires bucket configuration we cannot assume. The polling interval is configurable; the
 /// poll itself uses a single recursive list of the bucket and is best-effort.
 /// </remarks>
-internal sealed class S3ChangeWatcher : IAsyncDisposable
+internal sealed class ObjectStoreChangeWatcher : IAsyncDisposable
 {
     /// <summary>
     /// Name of the lost+found directory created in the virtualization root for
@@ -27,14 +29,14 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
     /// </summary>
     public const string LostAndFoundDirectoryName = ".s3files-lost+found";
 
-    private readonly IS3Backend backend;
+    private readonly IObjectStoreBackend backend;
     private readonly IProjFsCommandSink commandSink;
     private readonly ILostAndFoundQuarantine quarantine;
     private readonly TimeSpan interval;
-    private readonly ILogger<S3ChangeWatcher> logger;
+    private readonly ILogger<ObjectStoreChangeWatcher> logger;
 
     /// <summary>
-    /// S3-key → last-known state. Updated on poll diffs and on local mutations
+    /// Object-key → last-known state. Updated on poll diffs and on local mutations
     /// recorded via <see cref="RecordLocalUpload"/> / <see cref="RecordLocalDelete"/> /
     /// <see cref="RecordLocalRename"/> so the next poll doesn't re-import our own writes.
     /// </summary>
@@ -42,8 +44,8 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
         new(StringComparer.Ordinal);
 
     /// <summary>
-    /// S3 keys whose mutation is currently in flight from the local side. The poll
-    /// loop ignores these to avoid a "we just uploaded → S3 has a new ETag → revert local
+    /// Object keys whose mutation is currently in flight from the local side. The poll
+    /// loop ignores these to avoid a "we just uploaded → remote has a new ETag → revert local
     /// because we haven't recorded the new ETag yet" race.
     /// </summary>
     private readonly ConcurrentDictionary<string, byte> localKeysInFlight =
@@ -65,12 +67,12 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
     /// <paramref name="interval"/> and apply discovered changes through <paramref name="commandSink"/>.
     /// A non-positive interval disables polling entirely.
     /// </summary>
-    public S3ChangeWatcher(
-        IS3Backend backend,
+    public ObjectStoreChangeWatcher(
+        IObjectStoreBackend backend,
         IProjFsCommandSink commandSink,
         ILostAndFoundQuarantine quarantine,
         TimeSpan interval,
-        ILogger<S3ChangeWatcher> logger)
+        ILogger<ObjectStoreChangeWatcher> logger)
     {
         this.backend = backend;
         this.commandSink = commandSink;
@@ -87,14 +89,14 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
         if (interval <= TimeSpan.Zero)
         {
             logger.LogInformation(
-                "S3 change watcher disabled (sync interval is {Interval}).", interval);
+                "Object-store change watcher disabled (sync interval is {Interval}).", interval);
             return Task.CompletedTask;
         }
 
         cts = CancellationTokenSource.CreateLinkedTokenSource(initialCt);
         loopTask = Task.Run(() => RunLoopAsync(cts.Token), cts.Token);
         logger.LogInformation(
-            "S3 change watcher started (interval = {Interval}).", interval);
+            "Object-store change watcher started (interval = {Interval}).", interval);
         return Task.CompletedTask;
     }
 
@@ -125,30 +127,30 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
     /// Records a local upload so the next poll doesn't see the new ETag as an
     /// external modification and try to re-import our own write.
     /// </summary>
-    public void RecordLocalUpload(string s3Key, string etag, long size, DateTimeOffset lastModified)
+    public void RecordLocalUpload(string objectKey, string etag, long size, DateTimeOffset lastModified)
     {
-        if (string.IsNullOrEmpty(s3Key)) return;
-        snapshot[s3Key] = new ObjectSnapshot(etag ?? string.Empty, size, lastModified);
+        if (string.IsNullOrEmpty(objectKey)) return;
+        snapshot[objectKey] = new ObjectSnapshot(etag ?? string.Empty, size, lastModified);
     }
 
     /// <summary>
     /// Records a local delete so the next poll doesn't see the missing key as an
     /// external delete (which would attempt to remove a placeholder we already removed).
     /// </summary>
-    public void RecordLocalDelete(string s3Key)
+    public void RecordLocalDelete(string objectKey)
     {
-        if (string.IsNullOrEmpty(s3Key)) return;
-        snapshot.TryRemove(s3Key, out _);
+        if (string.IsNullOrEmpty(objectKey)) return;
+        snapshot.TryRemove(objectKey, out _);
     }
 
     /// <summary>
     /// Records a local prefix-delete: removes every snapshot entry under the
     /// (slash-terminated) prefix.
     /// </summary>
-    public void RecordLocalDeletePrefix(string s3KeyPrefix)
+    public void RecordLocalDeletePrefix(string objectKeyPrefix)
     {
-        if (string.IsNullOrEmpty(s3KeyPrefix)) return;
-        var prefix = EnsureTrailingSlash(s3KeyPrefix);
+        if (string.IsNullOrEmpty(objectKeyPrefix)) return;
+        var prefix = EnsureTrailingSlash(objectKeyPrefix);
         foreach (var key in snapshot.Keys)
         {
             if (key.StartsWith(prefix, StringComparison.Ordinal))
@@ -190,23 +192,23 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
     }
 
     /// <summary>
-    /// Acquires an "in-flight" token for a single S3 key. The poll loop ignores
+    /// Acquires an "in-flight" token for a single object key. The poll loop ignores
     /// keys with active tokens until the token is disposed, preventing self-trigger races.
     /// </summary>
-    public IDisposable BeginLocalKeyChange(string s3Key)
+    public IDisposable BeginLocalKeyChange(string objectKey)
     {
-        if (string.IsNullOrEmpty(s3Key)) return EmptyDisposable.Instance;
-        localKeysInFlight[s3Key] = 0;
-        return new ReleaseToken(() => localKeysInFlight.TryRemove(s3Key, out _));
+        if (string.IsNullOrEmpty(objectKey)) return EmptyDisposable.Instance;
+        localKeysInFlight[objectKey] = 0;
+        return new ReleaseToken(() => localKeysInFlight.TryRemove(objectKey, out _));
     }
 
     /// <summary>
     /// Acquires an in-flight token for a key prefix.
     /// </summary>
-    public IDisposable BeginLocalPrefixChange(string s3KeyPrefix)
+    public IDisposable BeginLocalPrefixChange(string objectKeyPrefix)
     {
-        if (string.IsNullOrEmpty(s3KeyPrefix)) return EmptyDisposable.Instance;
-        var prefix = EnsureTrailingSlash(s3KeyPrefix);
+        if (string.IsNullOrEmpty(objectKeyPrefix)) return EmptyDisposable.Instance;
+        var prefix = EnsureTrailingSlash(objectKeyPrefix);
         localPrefixesInFlight[prefix] = 0;
         return new ReleaseToken(() => localPrefixesInFlight.TryRemove(prefix, out _));
     }
@@ -260,7 +262,7 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
             snapshot[obj.Key] = ObjectSnapshot.From(obj);
         }
         logger.LogDebug(
-            "Initial S3 snapshot primed with {Count} object(s).", snapshot.Count);
+            "Initial object-store snapshot primed with {Count} object(s).", snapshot.Count);
     }
 
     /// <summary>
@@ -274,7 +276,7 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogError(ex, "Failed to take initial S3 snapshot; continuing with empty baseline.");
+            logger.LogError(ex, "Failed to take initial object-store snapshot; continuing with empty baseline.");
         }
 
         while (!ct.IsCancellationRequested)
@@ -292,7 +294,7 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
             catch (OperationCanceledException) { return; }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Error during S3 change poll; will retry next cycle.");
+                logger.LogError(ex, "Error during object-store change poll; will retry next cycle.");
             }
         }
     }
@@ -301,12 +303,12 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
     /// True when the key (or any registered prefix it falls under) currently has a
     /// local mutation in flight that the poll loop should ignore.
     /// </summary>
-    private bool IsLocallyInFlight(string s3Key)
+    private bool IsLocallyInFlight(string objectKey)
     {
-        if (localKeysInFlight.ContainsKey(s3Key)) return true;
+        if (localKeysInFlight.ContainsKey(objectKey)) return true;
         foreach (var prefix in localPrefixesInFlight.Keys)
         {
-            if (s3Key.StartsWith(prefix, StringComparison.Ordinal)) return true;
+            if (objectKey.StartsWith(prefix, StringComparison.Ordinal)) return true;
         }
         return false;
     }
@@ -314,22 +316,22 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
     /// <summary>
     /// Reacts to a newly-discovered remote object by injecting a placeholder.
     /// </summary>
-    private void HandleRemoteCreated(S3ObjectInfo obj)
+    private void HandleRemoteCreated(ObjectInfo obj)
     {
-        var contentId = S3Util.BuildContentId(obj.ETag);
+        var contentId = KeyPath.BuildContentId(obj.ETag);
         var ok = commandSink.TryWritePlaceholder(
             obj.RelativePath, obj.Size, obj.LastModified, contentId, isDirectory: false);
         if (ok)
         {
             logger.LogInformation(
-                "Imported new S3 object as placeholder: {Path}", obj.RelativePath);
+                "Imported new remote object as placeholder: {Path}", obj.RelativePath);
         }
         else
         {
             // The parent directory likely hasn't been materialized yet. Future enumerations
-            // will fetch the latest from S3, so silent skip is correct.
+            // will fetch the latest from the backend, so silent skip is correct.
             logger.LogDebug(
-                "Skipped placeholder for new S3 object {Path} (parent not materialized).",
+                "Skipped placeholder for new remote object {Path} (parent not materialized).",
                 obj.RelativePath);
         }
     }
@@ -338,9 +340,9 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
     /// Reacts to a remote modification by updating the placeholder, recreating it,
     /// or routing through conflict resolution when local data is dirty.
     /// </summary>
-    private void HandleRemoteModified(S3ObjectInfo obj)
+    private void HandleRemoteModified(ObjectInfo obj)
     {
-        var contentId = S3Util.BuildContentId(obj.ETag);
+        var contentId = KeyPath.BuildContentId(obj.ETag);
         var outcome = commandSink.TryUpdateFile(
             obj.RelativePath, obj.Size, obj.LastModified, contentId);
 
@@ -348,7 +350,7 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
         {
             case ProjFsUpdateOutcome.Updated:
                 logger.LogInformation(
-                    "Imported updated S3 object: {Path}", obj.RelativePath);
+                    "Imported updated remote object: {Path}", obj.RelativePath);
                 return;
 
             case ProjFsUpdateOutcome.NotFound:
@@ -364,7 +366,7 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
 
             default:
                 logger.LogWarning(
-                    "Failed to import updated S3 object: {Path}", obj.RelativePath);
+                    "Failed to import updated remote object: {Path}", obj.RelativePath);
                 return;
         }
     }
@@ -373,9 +375,9 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
     /// Reacts to a remote delete by removing the local placeholder, quarantining
     /// dirty local copies first when needed.
     /// </summary>
-    private void HandleRemoteDeleted(string s3Key)
+    private void HandleRemoteDeleted(string objectKey)
     {
-        var relativePath = S3Util.ToRelativePath(s3Key);
+        var relativePath = KeyPath.ToRelativePath(objectKey);
         var outcome = commandSink.TryDeleteFile(relativePath, allowDirty: false);
 
         switch (outcome)
@@ -383,25 +385,25 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
             case ProjFsUpdateOutcome.Updated:
             case ProjFsUpdateOutcome.NotFound:
                 logger.LogInformation(
-                    "Removed local placeholder after external S3 delete: {Path}", relativePath);
+                    "Removed local placeholder after external delete: {Path}", relativePath);
                 return;
 
             case ProjFsUpdateOutcome.DirtyConflict:
-                // Synthesize a "deleted" S3ObjectInfo for the conflict resolver. We won't
-                // re-create a placeholder afterwards because the object is gone in S3.
-                var stub = new S3ObjectInfo(
-                    Key: s3Key,
+                // Synthesize a "deleted" ObjectInfo for the conflict resolver. We won't
+                // re-create a placeholder afterwards because the object is gone remotely.
+                var stub = new ObjectInfo(
+                    Key: objectKey,
                     RelativePath: relativePath,
                     Size: 0,
                     LastModified: default,
                     ETag: string.Empty,
                     IsDirectory: false);
-                ResolveConflict(stub, S3Util.BuildContentId(string.Empty), isDelete: true);
+                ResolveConflict(stub, KeyPath.BuildContentId(string.Empty), isDelete: true);
                 return;
 
             default:
                 logger.LogWarning(
-                    "Failed to delete local placeholder after external S3 delete: {Path}",
+                    "Failed to delete local placeholder after external delete: {Path}",
                     relativePath);
                 return;
         }
@@ -409,11 +411,11 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
 
     /// <summary>
     /// Quarantines the dirty local copy and force-replaces (or removes) it so the
-    /// S3 version becomes authoritative.
+    /// remote version becomes authoritative.
     /// </summary>
-    private void ResolveConflict(S3ObjectInfo obj, byte[] contentId, bool isDelete)
+    private void ResolveConflict(ObjectInfo obj, byte[] contentId, bool isDelete)
     {
-        // S3 Files spec: "S3 bucket as the source of truth in case of conflicts." Move the
+        // Spec: "remote bucket as the source of truth in case of conflicts." Move the
         // dirty local copy to lost+found, then force-replace.
         var quarantined = quarantine.TryQuarantine(obj.RelativePath);
         if (!quarantined)
@@ -439,7 +441,7 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
         }
 
         logger.LogWarning(
-            "Conflict on {Path}: local copy quarantined to {LostAndFound}; S3 version is now authoritative.",
+            "Conflict on {Path}: local copy quarantined to {LostAndFound}; remote version is now authoritative.",
             obj.RelativePath, LostAndFoundDirectoryName);
     }
 
@@ -454,7 +456,7 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
     /// True when the previous and current snapshots disagree on identity. ETag is
     /// the primary signal; size and last-modified act as fallback for blank ETags.
     /// </summary>
-    private static bool HasChanged(ObjectSnapshot prev, S3ObjectInfo current)
+    private static bool HasChanged(ObjectSnapshot prev, ObjectInfo current)
     {
         // ETag is the primary signal; size/lastModified are tie-breakers when ETag is missing
         // (e.g., some S3-compatible servers return blank ETags for multipart uploads).
@@ -466,14 +468,14 @@ internal sealed class S3ChangeWatcher : IAsyncDisposable
     }
 
     /// <summary>
-    /// Minimal projection of an S3 object stored in the in-memory snapshot.
+    /// Minimal projection of an object stored in the in-memory snapshot.
     /// </summary>
     private readonly record struct ObjectSnapshot(string ETag, long Size, DateTimeOffset LastModified)
     {
         /// <summary>
-        /// Projects an <see cref="S3ObjectInfo"/> into the snapshot shape.
+        /// Projects an <see cref="ObjectInfo"/> into the snapshot shape.
         /// </summary>
-        public static ObjectSnapshot From(S3ObjectInfo info) =>
+        public static ObjectSnapshot From(ObjectInfo info) =>
             new(info.ETag, info.Size, info.LastModified);
     }
 

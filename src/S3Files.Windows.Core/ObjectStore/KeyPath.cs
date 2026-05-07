@@ -1,26 +1,15 @@
 using System.Text;
 
-namespace S3Files.Windows.S3;
+namespace S3Files.Windows.ObjectStore;
 
 /// <summary>
-/// Conversion helpers between Windows-style relative paths and S3 keys, plus a
-/// handful of constants shared by the backend and the virtualization layer.
+/// Conversion helpers between Windows-style relative paths and object-store keys.
+/// Forward-slash key separators are the convention shared by S3, GCS, and Azure Blob
+/// (Azure uses them as virtual path separators inside flat blob names), so this util
+/// is provider-neutral.
 /// </summary>
-internal static class S3Util
+internal static class KeyPath
 {
-    /// <summary>
-    /// Streams at or above this size are routed through TransferUtility's multipart
-    /// path. Picked to be well above the S3 5 MiB minimum part size so the multipart overhead
-    /// is worth paying.
-    /// </summary>
-    public const long MultipartThresholdBytes = 8L * 1024 * 1024;
-
-    /// <summary>
-    /// Per-part size for multipart uploads. Must be ≥ 5 MiB to satisfy the S3
-    /// minimum; the last part is allowed to be smaller.
-    /// </summary>
-    public const long MultipartPartSizeBytes = 5L * 1024 * 1024;
-
     /// <summary>
     /// Length of the ProjFS contentId we derive from an ETag. ProjFS allows up to 128 bytes;
     /// 16 bytes is enough to make placeholders comparable across runs without bloating each
@@ -29,30 +18,30 @@ internal static class S3Util
     public const int ContentIdLength = 16;
 
     /// <summary>
-    /// Converts a Windows relative path to an S3 key by swapping separators.
+    /// Converts a Windows relative path to an object-store key by swapping separators.
     /// </summary>
-    public static string ToS3Key(string relativePath) =>
+    public static string ToObjectKey(string relativePath) =>
         string.IsNullOrEmpty(relativePath) ? string.Empty : relativePath.Replace('\\', '/');
 
     /// <summary>
-    /// Converts an S3 key to a Windows relative path by swapping separators.
+    /// Converts an object-store key to a Windows relative path by swapping separators.
     /// </summary>
-    public static string ToRelativePath(string s3Key) =>
-        s3Key.Replace('/', '\\');
+    public static string ToRelativePath(string objectKey) =>
+        objectKey.Replace('/', '\\');
 
     /// <summary>
-    /// Normalizes a relative directory to an S3 prefix terminated with a trailing
+    /// Normalizes a relative directory to a key prefix terminated with a trailing
     /// slash; the empty input is returned as the empty string.
     /// </summary>
     public static string NormalizePrefix(string relativeDirectory)
     {
-        var prefix = ToS3Key(relativeDirectory);
+        var prefix = ToObjectKey(relativeDirectory);
         return prefix.Length > 0 && !prefix.EndsWith('/') ? prefix + '/' : prefix;
     }
 
     /// <summary>
-    /// Derives a stable, fixed-size ProjFS contentId from an S3 ETag. Surrounding quotes on
-    /// the ETag (S3's wire format) are stripped before hashing into the buffer.
+    /// Derives a stable, fixed-size ProjFS contentId from a provider ETag. Surrounding
+    /// quotes (S3's wire format) are stripped before hashing into the buffer.
     /// </summary>
     public static byte[] BuildContentId(string? etag)
     {
@@ -69,7 +58,7 @@ internal static class S3Util
 
     /// <summary>
     /// Returns the trailing-slash-terminated linked prefix, or the empty string when
-    /// no prefix is configured. Always lives in S3 key form (forward-slash separated).
+    /// no prefix is configured. Always lives in object-store key form (forward-slash separated).
     /// </summary>
     public static string NormalizeKeyPrefix(string? prefix)
     {
@@ -79,8 +68,8 @@ internal static class S3Util
     }
 
     /// <summary>
-    /// Maps a virt-root-relative key (or empty) to the full S3 key applied against
-    /// the bucket. The empty input maps to the prefix itself (typically used as a list root).
+    /// Maps a virt-root-relative key (or empty) to the full key applied against the
+    /// bucket/container. The empty input maps to the prefix itself (typically used as a list root).
     /// </summary>
     public static string FullKey(string keyPrefix, string relativeKey) =>
         relativeKey.Length == 0 ? keyPrefix : keyPrefix + relativeKey;
@@ -94,7 +83,7 @@ internal static class S3Util
         keyPrefix + NormalizePrefix(relativeDirectory);
 
     /// <summary>
-    /// Strips the linked prefix back off a full S3 key. Defensive: keys that don't
+    /// Strips the linked prefix back off a full key. Defensive: keys that don't
     /// start with the prefix are returned unchanged so a misrouted result is surfaced rather
     /// than silently mapped to a bogus relative path.
     /// </summary>

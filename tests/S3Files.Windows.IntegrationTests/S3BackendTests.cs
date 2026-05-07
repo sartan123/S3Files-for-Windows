@@ -1,6 +1,7 @@
 using Amazon.S3;
 using Amazon.S3.Model;
-using S3Files.Windows.S3;
+using S3Files.Windows.ObjectStore;
+using S3Files.Windows.ObjectStore.S3;
 using System.Text;
 using Xunit;
 
@@ -139,7 +140,7 @@ public sealed class S3BackendTests : IAsyncLifetime
         await UploadBytesAsync("dir/inside.txt", "c"u8.ToArray());
         await UploadBytesAsync("dir/nested/deep.txt", "d"u8.ToArray());
 
-        var entries = new List<S3ObjectInfo>();
+        var entries = new List<ObjectInfo>();
         await foreach (var e in backend.ListAsync(string.Empty, CancellationToken.None))
         {
             entries.Add(e);
@@ -159,7 +160,7 @@ public sealed class S3BackendTests : IAsyncLifetime
         await UploadBytesAsync("dir/sub/b.txt", "b"u8.ToArray());
         await UploadBytesAsync("other/c.txt", "c"u8.ToArray());
 
-        var entries = new List<S3ObjectInfo>();
+        var entries = new List<ObjectInfo>();
         await foreach (var e in backend.ListRecursiveAsync("dir", CancellationToken.None))
         {
             entries.Add(e);
