@@ -77,7 +77,9 @@ OSVFS は provider-neutral な
 - Windows 10 1809 (ビルド 17763) 以降、または Windows 11
 - Windows オプション機能 **`Client-ProjFS`** が有効化されていること
 - AWS SDK の標準的な認証情報チェーン (環境変数 / 共有プロファイル / IAM ロール
-  など) で解決できる AWS 認証情報
+  など) で解決できる AWS 認証情報、または下記
+  [AWS 認証情報の管理](#aws-認証情報の管理)で説明する OSVFS 内蔵の暗号化スト
+  アに保存した認証情報
 - 読み書き可能な S3 バケット
 - 対象バケットで **バージョニングが有効化されていること**。ローカルでの編集・
   削除は S3 では上書き PUT や `DeleteObject` として伝播するため、誤操作からの
@@ -120,6 +122,7 @@ osvfs `
 | `--root-folder` | 仮想化ルートのパス (必須) | — |
 | `--endpoint-url` | S3 エンドポイント URL の上書き (LocalStack / MinIO 用) | AWS 既定 |
 | `--region` | AWS リージョン (例: `us-east-1`、`ap-northeast-1`)。未指定時は SDK 標準のリージョン解決チェーン (環境変数 / プロファイル / IMDS) にフォールバックする | — |
+| `--aws-profile` | `osvfs credentials set --profile <name>` で保存済みの認証情報を使う (Windows Credential Manager に DPAPI で暗号化保存)。未指定時は AWS SDK の標準チェーンにフォールバックする | — |
 | `--prefix` | バケット内のキープレフィックス。指定すると、このプレフィックス配下のオブジェクトだけが仮想化ルートに投影される | — |
 | `--sync-interval-seconds` | 外部オブジェクトストア変更を検出するポーリング間隔。`0` で無効化 | `30` |
 | `--verbose` | デバッグレベルのログを有効化 | off |
@@ -129,6 +132,53 @@ osvfs `
 からはこのプレフィックスが論理ルートに見えるようになり、列挙・hydrate・
 書き込み・削除・リネームすべてがプレフィックス配下のオブジェクトにスコー
 プされます。バケット内のそれ以外のオブジェクトは見えなくなります。
+
+### AWS 認証情報の管理
+
+OSVFS は AWS SDK 標準の認証情報チェーン (環境変数 / 共有プロファイル
+`~/.aws/credentials` / IAM ロール / IMDS) を利用できるほか、**Windows
+Credential Manager 上に独自のユーザー単位の暗号化ストア**を持つことができま
+す。シークレットアクセスキー (および任意の STS セッショントークン) は
+**DPAPI** の `CurrentUser` スコープで暗号化されたうえで credential blob に
+書き込まれるため、**保存したユーザー本人だけが同一マシン上で復号できる**
+設計です。
+
+```powershell
+# 対話入力で保存 (シークレット入力はマスク表示)
+osvfs credentials set --profile prod
+
+# コマンドラインで全部渡す場合 (対話プロンプトなし)
+osvfs credentials set --profile prod `
+  --access-key AKIA... `
+  --secret-key ... `
+  --session-token ...   # 一時認証情報のときだけ
+
+# 保存済みプロファイルのメタデータ表示 (シークレットは絶対に表示されません)
+osvfs credentials get --profile prod
+
+# OSVFS 管理下のプロファイル一覧
+osvfs credentials list
+
+# 削除
+osvfs credentials remove --profile prod
+```
+
+その上で `--aws-profile <name>` を指定して `osvfs` を起動します:
+
+```powershell
+osvfs `
+  --provider s3 `
+  --bucket my-bucket `
+  --root-folder C:\Users\you\OSVFS `
+  --aws-profile prod
+```
+
+エントリは generic credential として `OSVFS:AWS:<profile>` という target
+name で保存され、`LocalMachine` スコープで永続化されます (ログアウト後も
+維持)。一方で blob は保存したユーザーの DPAPI 鍵で暗号化されているため、
+**別ユーザーや別マシンにエントリをコピーしても復号できません**。OSVFS の
+このストアはあくまで「ユーザー単位のローカルキャッシュ」として扱い、AWS
+認証情報のバックアップ用途には使わないでください。
 
 ## アーキテクチャ
 

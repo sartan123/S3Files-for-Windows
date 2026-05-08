@@ -72,7 +72,9 @@ abstraction left open for later.
 - Windows 10 1809 (build 17763) or later, or Windows 11
 - The Windows optional feature **`Client-ProjFS`** must be enabled
 - AWS credentials reachable via the standard AWS SDK chain (environment
-  variables, shared profile, IAM role, etc.)
+  variables, shared profile, IAM role, etc.) — or saved into the OSVFS
+  built-in encrypted store described in
+  [Managing AWS credentials](#managing-aws-credentials)
 - An S3 bucket you have read/write access to
 - **Bucket versioning must be Enabled** on the target bucket. `osvfs`
   refuses to start otherwise: local file edits and deletes propagate to S3
@@ -113,6 +115,7 @@ Open `C:\Users\you\OSVFS` in Explorer and the bucket contents appear.
 | `--root-folder` | Path to the virtualization root (required) | — |
 | `--endpoint-url` | Override the default S3 endpoint URL (e.g. for LocalStack / MinIO) | AWS default |
 | `--region` | AWS region (e.g. `us-east-1`, `ap-northeast-1`). When omitted, the SDK falls back to the standard region resolution chain (env vars, profile, IMDS). | — |
+| `--aws-profile` | Use credentials previously saved by `osvfs credentials set --profile <name>` (encrypted with DPAPI in Windows Credential Manager). When omitted, the AWS SDK's default chain is used. | — |
 | `--prefix` | Optional key prefix within the bucket. When set, only objects under this prefix are projected into the virtualization root. | — |
 | `--sync-interval-seconds` | Polling interval for detecting external object-store changes; `0` disables | `30` |
 | `--verbose` | Enable debug-level logging | off |
@@ -122,6 +125,53 @@ pass `--prefix team-a/`. The virtualization root then mirrors that prefix as
 its own logical root: listings, hydration, writes, deletes, and renames all
 stay scoped to objects under the prefix, and the rest of the bucket is
 invisible.
+
+### Managing AWS credentials
+
+OSVFS can resolve AWS credentials through the standard AWS SDK chain
+(environment variables, the shared `~/.aws/credentials` profile, IAM role,
+IMDS), **or** through its own per-user encrypted store backed by Windows
+Credential Manager. The secret access key — and any STS session token — is
+encrypted with **DPAPI** at `CurrentUser` scope before it is written into the
+credential blob, so the entry can only be decrypted by the user that saved
+it on the same machine.
+
+```powershell
+# Save a profile (the secret prompt is masked)
+osvfs credentials set --profile prod
+
+# Or pass everything on the command line (skip the prompts)
+osvfs credentials set --profile prod `
+  --access-key AKIA... `
+  --secret-key ... `
+  --session-token ...   # optional, for temporary credentials
+
+# Inspect a profile (the secret is never echoed)
+osvfs credentials get --profile prod
+
+# List every profile owned by OSVFS
+osvfs credentials list
+
+# Delete a profile
+osvfs credentials remove --profile prod
+```
+
+Then run `osvfs` with `--aws-profile <name>` to use it for a mount:
+
+```powershell
+osvfs `
+  --provider s3 `
+  --bucket my-bucket `
+  --root-folder C:\Users\you\OSVFS `
+  --aws-profile prod
+```
+
+Each entry is stored as a Windows generic credential under the target name
+`OSVFS:AWS:<profile>`. The credential persists at `LocalMachine` scope
+(it survives logout) but the DPAPI envelope is bound to the saving user, so
+copying the entry to another user — or to another machine — will fail to
+decrypt. Treat the OSVFS store as a per-user convenience cache, not as a
+backup of your AWS credentials.
 
 ## Architecture
 
