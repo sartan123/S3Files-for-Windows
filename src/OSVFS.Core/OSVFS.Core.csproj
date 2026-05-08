@@ -21,6 +21,7 @@
     <InternalsVisibleTo Include="osvfs" />
     <InternalsVisibleTo Include="OSVFS.Core.UnitTests" />
     <InternalsVisibleTo Include="OSVFS.Core.IntegrationTests" />
+    <InternalsVisibleTo Include="OSVFS.UnitTests" />
   </ItemGroup>
 
 </Project>

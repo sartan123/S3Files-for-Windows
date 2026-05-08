@@ -6,4 +6,5 @@
   <Project Path="src/OSVFS/OSVFS.csproj" />
   <Project Path="tests/OSVFS.Core.UnitTests/OSVFS.Core.UnitTests.csproj" />
   <Project Path="tests/OSVFS.Core.IntegrationTests/OSVFS.Core.IntegrationTests.csproj" />
+  <Project Path="tests/OSVFS.UnitTests/OSVFS.UnitTests.csproj" />
 </Solution>

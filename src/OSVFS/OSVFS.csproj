@@ -38,4 +38,8 @@
     <ProjectReference Include="..\OSVFS.Core\OSVFS.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="OSVFS.UnitTests" />
+  </ItemGroup>
+
 </Project>
