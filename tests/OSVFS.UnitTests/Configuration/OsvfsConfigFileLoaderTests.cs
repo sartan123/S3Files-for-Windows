@@ -166,6 +166,17 @@ public class OsvfsConfigFileLoaderTests
         Assert.Null(config.RootFolder);
         Assert.Null(config.Verbose);
         Assert.Null(config.SyncIntervalSeconds);
+        Assert.Null(config.AllowUnversioned);
+    }
+
+    [Fact]
+    public void Parse_allow_unversioned_kebab_and_snake_aliases_accepted()
+    {
+        var kebab = OsvfsConfigFileLoader.ParseContent("allow-unversioned = true", "test.toml");
+        var snake = OsvfsConfigFileLoader.ParseContent("allow_unversioned = true", "test.toml");
+
+        Assert.True(kebab.AllowUnversioned);
+        Assert.True(snake.AllowUnversioned);
     }
 
     [Fact]

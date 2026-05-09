@@ -134,6 +134,8 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     /// <summary>
     /// Verifies the bucket safety preconditions, starts virtualization, and kicks
     /// off the background change watcher. Returns false on any startup failure.
+    /// Throws <see cref="BucketVersioningNotEnabledException"/> when the bucket
+    /// has versioning disabled and <c>--allow-unversioned</c> was not passed.
     /// </summary>
     public bool StartVirtualization()
     {
@@ -156,8 +158,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     }
 
     /// <summary>
-    /// Refuses to start unless the bucket has versioning Enabled, so accidental
-    /// deletes or overwrites stay recoverable.
+    /// Reads the bucket versioning status and applies the safety policy. Returns
+    /// false on backend failure; rethrows
+    /// <see cref="BucketVersioningNotEnabledException"/> when the bucket is
+    /// unversioned and the operator did not opt out.
     /// </summary>
     private bool EnsureBucketVersioningEnabled()
     {
@@ -174,16 +178,8 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             return false;
         }
 
-        if (status == BucketVersioningStatus.Enabled)
-        {
-            logger.LogInformation("Bucket versioning is enabled on {Bucket}.", Options.Bucket);
-            return true;
-        }
-
-        logger.LogError(
-            "Bucket versioning must be Enabled on {Bucket} (current: {Status}). Refusing to start.",
-            Options.Bucket, status);
-        return false;
+        BucketVersioningGuard.Validate(status, Options.Bucket, Options.AllowUnversioned, logger);
+        return true;
     }
 
     /// <summary>

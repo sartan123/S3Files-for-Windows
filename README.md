@@ -77,9 +77,9 @@ abstraction left open for later.
   [Managing AWS credentials](#managing-aws-credentials)
 - An S3 bucket you have read/write access to
 - **Bucket versioning must be Enabled** on the target bucket. `osvfs`
-  refuses to start otherwise: local file edits and deletes propagate to S3
-  as overwrites and `DeleteObject` calls, and versioning is what makes those
-  recoverable. The credentials must also allow `s3:GetBucketVersioning`.
+  refuses to start otherwise — see [Why versioning matters](#why-versioning-matters)
+  for the rationale and the `--allow-unversioned` escape hatch. The
+  credentials must also allow `s3:GetBucketVersioning`.
 
 Enable versioning once with the AWS CLI:
 
@@ -88,6 +88,24 @@ aws s3api put-bucket-versioning `
   --bucket my-bucket `
   --versioning-configuration Status=Enabled
 ```
+
+#### Why versioning matters
+
+Local file edits and deletes inside the virtualization root propagate to S3
+as overwrite `PutObject` and `DeleteObject` calls. Without bucket versioning
+those operations are **destructive and irreversible**: a deleted object is
+gone, an overwrite leaves no prior copy. Versioning turns each of those
+calls into a new version + delete-marker pair, so a misclick in Explorer or
+a runaway script remains recoverable.
+
+If `osvfs` detects that the configured bucket has versioning disabled (or
+suspended) it refuses to start with a copy-pasteable `aws s3api
+put-bucket-versioning` command, the bucket name, and a link back to this
+section.
+
+For CI runs or disposable buckets where the bucket is recreated per-job
+and the recoverability story does not apply, pass `--allow-unversioned` to
+bypass the safety check.
 
 Enable ProjFS once, in an elevated PowerShell session:
 
@@ -123,6 +141,7 @@ Open `C:\Users\you\OSVFS` in Explorer and the bucket contents appear.
 | `--multipart-threshold` | Stream size at or above which uploads are routed through the multipart path. Same K/M/G suffixes as `--bandwidth-up`. | `8M` |
 | `--multipart-part-size` | Per-part size used by multipart uploads. Must be between `5M` and `5G`. | `5M` |
 | `--log-format` | Console log output format: `text` (single-line, human-readable) or `json` (one UTF-8 JSON object per line, UTC timestamps, for log shippers like Datadog / Loki). | `text` |
+| `--allow-unversioned` | **DANGER:** Skip the bucket-versioning safety check and run against a bucket without versioning. Local edits and deletes become unrecoverable. Intended for CI / disposable buckets only — see [Why versioning matters](#why-versioning-matters). | off |
 | `--verbose` | Enable debug-level logging | off |
 
 To project only a sub-tree of a bucket — for example `s3://my-bucket/team-a/` —
@@ -273,6 +292,7 @@ bandwidth-down       = "10M"                     # optional, "0" / omit = unlimi
 multipart-threshold  = "8M"                      # optional
 multipart-part-size  = "16M"                     # optional, 5M..5G
 log-format           = "text"                    # optional, "text" or "json"
+allow-unversioned    = false                     # DANGER: skip the bucket-versioning safety check
 verbose              = false
 sync-interval-seconds = 30
 ```

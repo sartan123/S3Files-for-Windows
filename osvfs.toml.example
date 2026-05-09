@@ -70,5 +70,9 @@
 # timestamps for log shippers such as Datadog or Loki.
 # log-format = "text"
 
+# DANGER: skip the bucket-versioning safety check. Local edits and deletes
+# become unrecoverable. Intended for CI / disposable buckets only.
+# allow-unversioned = false
+
 # Raise log verbosity to Debug.
 # verbose = false
