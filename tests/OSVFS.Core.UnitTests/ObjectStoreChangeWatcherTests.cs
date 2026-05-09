@@ -158,6 +158,31 @@ public sealed class ObjectStoreChangeWatcherTests
         Assert.Equal(new[] { "k.txt" }, source.RecordedUploads);
     }
 
+    [Fact]
+    public void RegisterWatchedDirectory_forwards_to_a_directory_aware_source()
+    {
+        var source = new RegistrarChangeSource();
+        var watcher = NewWatcher(source, new RecordingSink(), new RecordingQuarantine());
+
+        watcher.RegisterWatchedDirectory("docs");
+
+        Assert.True(watcher.SupportsDirectoryWatchRegistration);
+        Assert.Equal(new[] { "docs" }, source.Registered);
+        Assert.Equal(1, watcher.WatchedDirectoryCount);
+    }
+
+    [Fact]
+    public void RegisterWatchedDirectory_is_a_noop_when_the_source_does_not_implement_the_facet()
+    {
+        var source = new FakeChangeSource(); // ILocalMutationRecorder only — no registrar
+        var watcher = NewWatcher(source, new RecordingSink(), new RecordingQuarantine());
+
+        watcher.RegisterWatchedDirectory("docs");
+
+        Assert.False(watcher.SupportsDirectoryWatchRegistration);
+        Assert.Equal(0, watcher.WatchedDirectoryCount);
+    }
+
     private static ObjectStoreChangeWatcher NewWatcher(
         IChangeSource source, IProjFsCommandSink sink, ILostAndFoundQuarantine quarantine)
         => new(
@@ -294,5 +319,32 @@ public sealed class ObjectStoreChangeWatcherTests
     {
         public static readonly IDisposable Empty = new Disposable();
         public void Dispose() { }
+    }
+
+    /// <summary>
+    /// Source-shaped fake that also implements <see cref="IDirectoryWatchRegistrar"/>
+    /// so the watcher's forwarding path can be observed.
+    /// </summary>
+    private sealed class RegistrarChangeSource : IChangeSource, IDirectoryWatchRegistrar
+    {
+        public List<string> Registered { get; } = new();
+
+        public int WatchedDirectoryCount => Registered.Count;
+
+        public void RegisterWatchedDirectory(string relativeDirectory) =>
+            Registered.Add(relativeDirectory);
+
+        public IAsyncEnumerable<ObjectChangeEvent> WatchAsync(CancellationToken ct) =>
+            EmptyAsync(ct);
+
+        private static async IAsyncEnumerable<ObjectChangeEvent> EmptyAsync(
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.CompletedTask;
+            ct.ThrowIfCancellationRequested();
+            yield break;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

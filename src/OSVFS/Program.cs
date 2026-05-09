@@ -62,6 +62,11 @@ var changeSourceOption = new Option<ChangeSourceKind?>("--change-source")
     Description = "Strategy for detecting external object-store changes: 'polling' (re-list bucket on --sync-interval-seconds) or 'events' (long-poll an SQS queue carrying EventBridge S3 notifications; requires --event-queue).",
 };
 
+var syncModeOption = new Option<string?>("--sync-mode")
+{
+    Description = "Polling reconciliation strategy: 'on-demand' (default; re-list only directories the user has visited via ProjFS — scales with visited dirs, not bucket size) or 'full' (re-list entire bucket each tick — preserves the original Phase 1 behavior).",
+};
+
 var eventQueueOption = new Option<string?>("--event-queue")
 {
     Description = "SQS queue URL or queue name carrying EventBridge S3 notifications for the bucket. Required when --change-source is 'events'. See README for the necessary EventBridge rule + IAM policy.",
@@ -116,6 +121,7 @@ var rootCommand = new RootCommand("OSVFS — Object Storage Virtual File System 
     readOnlyOption,
     syncIntervalOption,
     changeSourceOption,
+    syncModeOption,
     eventQueueOption,
     awsProfileOption,
     bandwidthUpOption,
@@ -216,6 +222,23 @@ rootCommand.SetAction(parseResult =>
         return ExitGeneralException;
     }
 
+    SyncMode syncMode;
+    var rawSyncMode = parseResult.GetValue(syncModeOption);
+    if (!string.IsNullOrEmpty(rawSyncMode))
+    {
+        if (!TryParseSyncMode(rawSyncMode, out syncMode))
+        {
+            logger.LogError(
+                "--sync-mode '{Mode}' is not recognized. Expected one of: on-demand, full.",
+                rawSyncMode);
+            return ExitGeneralException;
+        }
+    }
+    else
+    {
+        syncMode = fileConfig?.SyncMode ?? SyncMode.OnDemand;
+    }
+
     var options = new ProjFsProviderOptions
     {
         Provider = parseResult.GetValue(providerOption) ?? fileConfig?.Provider ?? ObjectStoreProvider.S3,
@@ -228,6 +251,7 @@ rootCommand.SetAction(parseResult =>
         ReadOnly = GetCliBool(parseResult, readOnlyOption) ?? fileConfig?.ReadOnly ?? false,
         SyncIntervalSeconds = parseResult.GetValue(syncIntervalOption) ?? fileConfig?.SyncIntervalSeconds ?? 30,
         ChangeSource = parseResult.GetValue(changeSourceOption) ?? fileConfig?.ChangeSource ?? ChangeSourceKind.Polling,
+        SyncMode = syncMode,
         EventQueue = parseResult.GetValue(eventQueueOption) ?? fileConfig?.EventQueue,
         Credentials = credentials,
         BandwidthLimits = bandwidthLimits,
@@ -265,6 +289,15 @@ static bool? GetCliBool(ParseResult parseResult, Option<bool> option)
     var result = parseResult.GetResult(option);
     if (result is null || result.Implicit) return null;
     return parseResult.GetValue(option);
+}
+
+// Accepts the CLI-friendly "on-demand" alongside the raw enum literal "ondemand"
+// and the case-insensitive "full". Centralized so Program.cs and the TOML loader
+// agree on which spellings are valid.
+static bool TryParseSyncMode(string raw, out SyncMode mode)
+{
+    var normalized = raw.Replace("-", string.Empty);
+    return Enum.TryParse(normalized, ignoreCase: true, out mode);
 }
 
 // Resolves an --aws-profile name against the credential store. Returns null when no

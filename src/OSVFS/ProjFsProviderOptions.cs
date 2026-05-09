@@ -62,6 +62,15 @@ internal sealed class ProjFsProviderOptions
     public ChangeSourceKind ChangeSource { get; init; } = ChangeSourceKind.Polling;
 
     /// <summary>
+    /// Polling reconciliation strategy. <see cref="SyncMode.OnDemand"/> (the
+    /// default) re-lists only the directories the user has actually visited;
+    /// <see cref="SyncMode.Full"/> re-lists the whole bucket each tick. Only
+    /// consulted when <see cref="ChangeSource"/> is
+    /// <see cref="ChangeSourceKind.Polling"/>.
+    /// </summary>
+    public SyncMode SyncMode { get; init; } = SyncMode.OnDemand;
+
+    /// <summary>
     /// SQS queue URL or queue name carrying EventBridge S3 notifications. Required
     /// when <see cref="ChangeSource"/> is <see cref="ChangeSourceKind.Events"/>.
     /// </summary>

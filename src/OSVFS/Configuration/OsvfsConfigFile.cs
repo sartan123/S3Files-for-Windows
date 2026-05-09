@@ -60,6 +60,13 @@ internal sealed class OsvfsConfigFile
     public ChangeSourceKind? ChangeSource { get; init; }
 
     /// <summary>
+    /// Polling reconciliation strategy — on-demand (per visited directory) or
+    /// full (whole bucket). Default <see cref="SyncMode.OnDemand"/>; only
+    /// consulted when <see cref="ChangeSource"/> is <see cref="ChangeSourceKind.Polling"/>.
+    /// </summary>
+    public SyncMode? SyncMode { get; init; }
+
+    /// <summary>
     /// SQS queue URL or queue name carrying EventBridge S3 notifications.
     /// </summary>
     public string? EventQueue { get; init; }
@@ -119,6 +126,7 @@ internal sealed class OsvfsConfigFile
         ReadOnly = overlay.ReadOnly ?? ReadOnly,
         SyncIntervalSeconds = overlay.SyncIntervalSeconds ?? SyncIntervalSeconds,
         ChangeSource = overlay.ChangeSource ?? ChangeSource,
+        SyncMode = overlay.SyncMode ?? SyncMode,
         EventQueue = overlay.EventQueue ?? EventQueue,
         AwsProfile = overlay.AwsProfile ?? AwsProfile,
         BandwidthUp = overlay.BandwidthUp ?? BandwidthUp,
