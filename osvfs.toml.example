@@ -65,5 +65,10 @@
 # allow up to 160 GiB, 64M parts allow up to 640 GiB).
 # multipart-part-size = "16M"
 
+# Console log output format. "text" (default) writes single-line, human-
+# readable output; "json" writes one UTF-8 JSON object per line with UTC
+# timestamps for log shippers such as Datadog or Loki.
+# log-format = "text"
+
 # Raise log verbosity to Debug.
 # verbose = false

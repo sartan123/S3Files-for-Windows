@@ -82,6 +82,11 @@ internal sealed class OsvfsConfigFile
     public string? MultipartPartSize { get; init; }
 
     /// <summary>
+    /// Console log output format. Null falls back to <see cref="LogFormat.Text"/>.
+    /// </summary>
+    public LogFormat? LogFormat { get; init; }
+
+    /// <summary>
     /// Returns a copy of this config with values from <paramref name="overlay"/> taking
     /// precedence wherever they are non-null. Used to fold the project-local
     /// <c>osvfs.toml</c> on top of the user-global <c>%APPDATA%/OSVFS/config.toml</c>.
@@ -102,5 +107,6 @@ internal sealed class OsvfsConfigFile
         BandwidthDown = overlay.BandwidthDown ?? BandwidthDown,
         MultipartThreshold = overlay.MultipartThreshold ?? MultipartThreshold,
         MultipartPartSize = overlay.MultipartPartSize ?? MultipartPartSize,
+        LogFormat = overlay.LogFormat ?? LogFormat,
     };
 }

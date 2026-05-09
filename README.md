@@ -122,6 +122,7 @@ Open `C:\Users\you\OSVFS` in Explorer and the bucket contents appear.
 | `--bandwidth-down` | Download bandwidth ceiling. Same format as `--bandwidth-up`. | — (unlimited) |
 | `--multipart-threshold` | Stream size at or above which uploads are routed through the multipart path. Same K/M/G suffixes as `--bandwidth-up`. | `8M` |
 | `--multipart-part-size` | Per-part size used by multipart uploads. Must be between `5M` and `5G`. | `5M` |
+| `--log-format` | Console log output format: `text` (single-line, human-readable) or `json` (one UTF-8 JSON object per line, UTC timestamps, for log shippers like Datadog / Loki). | `text` |
 | `--verbose` | Enable debug-level logging | off |
 
 To project only a sub-tree of a bucket — for example `s3://my-bucket/team-a/` —
@@ -199,6 +200,50 @@ overlap and starve other I/O. The integration test
 `S3BackendListPaginationTests` logs the observed `ms / 1000 keys` against
 LocalStack and is the easiest place to dial in a per-environment number.
 
+### Structured logging
+
+By default `osvfs` writes single-line, human-readable log entries to the
+console. Pass `--log-format json` (or set `log-format = "json"` in
+[`osvfs.toml`](#configuration-file)) to switch to a structured stream that
+log shippers such as Datadog or Loki can parse without regex:
+
+```powershell
+osvfs --bucket my-bucket --root-folder C:\Users\you\OSVFS --log-format json
+```
+
+Each log entry is written as a single line (terminated with the platform
+line separator) carrying one JSON object. Field names follow the keys
+produced by `Microsoft.Extensions.Logging.Console`'s JSON formatter:
+
+| Field | Description |
+| --- | --- |
+| `Timestamp` | UTC timestamp in `yyyy-MM-ddTHH:mm:ss.fffZ` format. |
+| `EventId` | The `EventId.Id` of the log entry (`0` when not set). |
+| `LogLevel` | `Trace`, `Debug`, `Information`, `Warning`, `Error`, or `Critical`. |
+| `Category` | Logger category — typically the source type's full name (`OSVFS`, `OSVFS.ProjFs.ProjFsProvider`, ...). |
+| `Message` | Final formatted message after structured-template substitution. |
+| `State` | Object containing the original message template and each named placeholder (e.g. `{Bucket}`) as a separate property — preserved as structured data for downstream filtering. |
+| `Exception` | Present only when an exception was attached; carries the formatted exception text. |
+
+Sample line (pretty-printed here for readability — on the wire it is one
+line):
+
+```json
+{
+  "Timestamp": "2026-05-09T11:22:33.456Z",
+  "EventId": 0,
+  "LogLevel": "Information",
+  "Category": "OSVFS",
+  "Message": "Virtualizing s3://my-bucket at C:\\Users\\you\\OSVFS",
+  "State": {
+    "Message": "Virtualizing s3://my-bucket at C:\\Users\\you\\OSVFS",
+    "Bucket": "my-bucket",
+    "Root": "C:\\Users\\you\\OSVFS",
+    "{OriginalFormat}": "Virtualizing s3://{Bucket} at {Root}"
+  }
+}
+```
+
 ### Configuration file
 
 Every option that can be passed to the root `osvfs` command can also be set
@@ -227,6 +272,7 @@ bandwidth-up         = "5M"                      # optional, "0" / omit = unlimi
 bandwidth-down       = "10M"                     # optional, "0" / omit = unlimited
 multipart-threshold  = "8M"                      # optional
 multipart-part-size  = "16M"                     # optional, 5M..5G
+log-format           = "text"                    # optional, "text" or "json"
 verbose              = false
 sync-interval-seconds = 30
 ```

@@ -29,6 +29,7 @@ public class OsvfsConfigFileLoaderTests
             bandwidth-down = "10M"
             multipart-threshold = "16M"
             multipart-part-size = "32M"
+            log-format = "json"
             """;
 
         var config = OsvfsConfigFileLoader.ParseContent(toml, "test.toml");
@@ -47,6 +48,40 @@ public class OsvfsConfigFileLoaderTests
         Assert.Equal("10M", config.BandwidthDown);
         Assert.Equal("16M", config.MultipartThreshold);
         Assert.Equal("32M", config.MultipartPartSize);
+        Assert.Equal(LogFormat.Json, config.LogFormat);
+    }
+
+    [Fact]
+    public void Parse_log_format_is_case_insensitive()
+    {
+        var config = OsvfsConfigFileLoader.ParseContent("log-format = \"JSON\"", "test.toml");
+        Assert.Equal(LogFormat.Json, config.LogFormat);
+    }
+
+    [Fact]
+    public void Parse_log_format_snake_alias_accepted()
+    {
+        var config = OsvfsConfigFileLoader.ParseContent("log_format = \"text\"", "test.toml");
+        Assert.Equal(LogFormat.Text, config.LogFormat);
+    }
+
+    [Fact]
+    public void Parse_unknown_log_format_throws()
+    {
+        var ex = Assert.Throws<OsvfsConfigException>(() =>
+            OsvfsConfigFileLoader.ParseContent("log-format = \"xml\"", "test.toml"));
+        Assert.Contains("xml", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MergeOverlay_log_format_overrides_user_value()
+    {
+        var user = new OsvfsConfigFile { LogFormat = LogFormat.Text };
+        var project = new OsvfsConfigFile { LogFormat = LogFormat.Json };
+
+        var merged = user.MergeOverlay(project);
+
+        Assert.Equal(LogFormat.Json, merged.LogFormat);
     }
 
     [Fact]

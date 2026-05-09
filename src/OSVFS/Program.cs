@@ -3,6 +3,7 @@ using System.CommandLine;
 using OSVFS;
 using OSVFS.Configuration;
 using OSVFS.Credentials;
+using OSVFS.Logging;
 using OSVFS.Net;
 using OSVFS.ObjectStore;
 using OSVFS.ProjFs;
@@ -81,6 +82,11 @@ var multipartPartSizeOption = new Option<string?>("--multipart-part-size")
     Description = "Per-part size used by multipart uploads. Must be between 5M and 5G; the last part may be smaller. Defaults to 5M.",
 };
 
+var logFormatOption = new Option<LogFormat?>("--log-format")
+{
+    Description = "Console log output format. 'text' (default) writes single-line human-readable output; 'json' writes one JSON object per line with UTC timestamps for log shippers (Datadog, Loki, etc.).",
+};
+
 var credentialStore = new WindowsCredentialStore();
 
 var rootCommand = new RootCommand("OSVFS — Object Storage Virtual File System for Windows: mount a cloud object-store bucket/container as a local folder via ProjFS.")
@@ -99,6 +105,7 @@ var rootCommand = new RootCommand("OSVFS — Object Storage Virtual File System 
     bandwidthDownOption,
     multipartThresholdOption,
     multipartPartSizeOption,
+    logFormatOption,
 };
 
 rootCommand.Subcommands.Add(CredentialsCommandFactory.Build(credentialStore));
@@ -117,14 +124,9 @@ rootCommand.SetAction(parseResult =>
     }
 
     var verbose = GetCliBool(parseResult, verboseOption) ?? fileConfig?.Verbose ?? false;
+    var logFormat = parseResult.GetValue(logFormatOption) ?? fileConfig?.LogFormat ?? LogFormat.Text;
 
-    using var loggerFactory = LoggerFactory.Create(builder => builder
-        .SetMinimumLevel(verbose ? LogLevel.Debug : LogLevel.Information)
-        .AddSimpleConsole(o =>
-        {
-            o.SingleLine = true;
-            o.TimestampFormat = "HH:mm:ss ";
-        }));
+    using var loggerFactory = LogConsoleFactory.Create(verbose, logFormat);
 
     var logger = loggerFactory.CreateLogger("OSVFS");
 

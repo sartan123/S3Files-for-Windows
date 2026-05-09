@@ -122,6 +122,7 @@ internal static class OsvfsConfigFileLoader
             BandwidthDown = ReadString(table, "bandwidth-down", "bandwidth_down", sourcePath),
             MultipartThreshold = ReadString(table, "multipart-threshold", "multipart_threshold", sourcePath),
             MultipartPartSize = ReadString(table, "multipart-part-size", "multipart_part_size", sourcePath),
+            LogFormat = ReadLogFormat(table, sourcePath),
         };
     }
 
@@ -204,6 +205,21 @@ internal static class OsvfsConfigFileLoader
         throw new OsvfsConfigException(
             $"OSVFS config file '{sourcePath}': unknown provider '{raw}'. Expected one of: " +
             string.Join(", ", Enum.GetNames<ObjectStoreProvider>()));
+    }
+
+    /// <summary>
+    /// Reads <c>log-format</c> as a case-insensitive enum literal. Accepts the same
+    /// tokens as the <c>--log-format</c> CLI flag.
+    /// </summary>
+    private static LogFormat? ReadLogFormat(TomlTable table, string sourcePath)
+    {
+        var raw = ReadString(table, "log-format", "log_format", sourcePath);
+        if (raw is null) return null;
+        if (Enum.TryParse<LogFormat>(raw, ignoreCase: true, out var parsed))
+            return parsed;
+        throw new OsvfsConfigException(
+            $"OSVFS config file '{sourcePath}': unknown log-format '{raw}'. Expected one of: " +
+            string.Join(", ", Enum.GetNames<LogFormat>()).ToLowerInvariant());
     }
 }
 
