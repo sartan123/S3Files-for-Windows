@@ -151,6 +151,25 @@ bucket on the upload payload stream and the download response stream, so
 `TransferUtility`'s multipart workers and the on-demand hydration path are
 both paced by the same ceiling.
 
+### Sync interval for large buckets
+
+`osvfs` detects external object-store changes by re-listing the bucket every
+`--sync-interval-seconds` (default `30`). Each poll walks every page of
+ListObjectsV2 (`NextContinuationToken` is threaded automatically), so the
+entire bucket — or the configured `--prefix` sub-tree — is scanned on every
+tick.
+
+Because S3 caps a single ListObjectsV2 page at 1000 keys, the wall time of a
+poll grows roughly linearly with the number of objects under the watched
+prefix. As a rough planning guide, a single ListObjectsV2 page typically
+returns in tens to low-hundreds of milliseconds against AWS S3 from a nearby
+region, so a 100k-object bucket needs ~100 round-trips and a few seconds of
+listing per tick. If the listing time approaches `--sync-interval-seconds`,
+raise the interval (or scope the projection with `--prefix`) so polls do not
+overlap and starve other I/O. The integration test
+`S3BackendListPaginationTests` logs the observed `ms / 1000 keys` against
+LocalStack and is the easiest place to dial in a per-environment number.
+
 ### Configuration file
 
 Every option that can be passed to the root `osvfs` command can also be set

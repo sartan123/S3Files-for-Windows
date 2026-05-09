@@ -407,22 +407,13 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     }
 
     /// <summary>
-    /// Iterates ListObjectsV2 pages, threading the continuation token automatically.
-    /// The caller's <paramref name="request"/> is mutated in place and should not be reused
-    /// after enumeration.
+    /// Iterates ListObjectsV2 pages on this backend's client. Delegates the
+    /// continuation-token plumbing to <see cref="S3Pagination.ListPagesAsync"/>.
     /// </summary>
-    private async IAsyncEnumerable<ListObjectsV2Response> ListPagesAsync(
+    private IAsyncEnumerable<ListObjectsV2Response> ListPagesAsync(
         ListObjectsV2Request request,
-        [EnumeratorCancellation] CancellationToken ct)
-    {
-        do
-        {
-            var response = await client.ListObjectsV2Async(request, ct).ConfigureAwait(false);
-            yield return response;
-            request.ContinuationToken = response.NextContinuationToken;
-        }
-        while (!string.IsNullOrEmpty(request.ContinuationToken));
-    }
+        CancellationToken ct) =>
+        S3Pagination.ListPagesAsync(client.ListObjectsV2Async, request, ct);
 
     /// <summary>
     /// Yields one <see cref="ObjectInfo"/> per real (non-marker) object across all
