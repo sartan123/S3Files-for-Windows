@@ -143,6 +143,7 @@ Open `C:\Users\you\OSVFS` in Explorer and the bucket contents appear.
 | `--bandwidth-down` | Download bandwidth ceiling. Same format as `--bandwidth-up`. | — (unlimited) |
 | `--multipart-threshold` | Stream size at or above which uploads are routed through the multipart path. Same K/M/G suffixes as `--bandwidth-up`. | `8M` |
 | `--multipart-part-size` | Per-part size used by multipart uploads. Must be between `5M` and `5G`. | `5M` |
+| `--retry-max-attempts` | Total attempts (initial + retries) the AWS SDK makes on transient failures. `1` disables retries; `4xx` errors fail immediately regardless. See [Retry policy](#retry-policy). | `3` |
 | `--log-format` | Console log output format: `text` (single-line, human-readable) or `json` (one UTF-8 JSON object per line, UTC timestamps, for log shippers like Datadog / Loki). | `text` |
 | `--allow-unversioned` | **DANGER:** Skip the bucket-versioning safety check and run against a bucket without versioning. Local edits and deletes become unrecoverable. Intended for CI / disposable buckets only — see [Why versioning matters](#why-versioning-matters). | off |
 | `--verbose` | Enable debug-level logging | off |
@@ -202,6 +203,38 @@ upload at completion time:
   largest object you can upload is `part-size × 10 000` (16 MiB parts
   → 160 GiB max; 64 MiB parts → 640 GiB max). Pick a part size large
   enough to fit your largest expected file.
+
+### Retry policy
+
+Transient object-store failures are retried by the AWS SDK pipeline. OSVFS
+configures the client with `RetryMode.Adaptive` (the SDK's adaptive
+client-side throttling, which combines the standard exponential backoff with
+a token bucket that suppresses request bursts when the service signals
+overload) and `MaxErrorRetry = --retry-max-attempts − 1`. The SDK's built-in
+retry classifier decides which failures are eligible:
+
+| Failure | Retried? | Notes |
+| --- | --- | --- |
+| HTTP 5xx (`500`, `502`, `503`, `504`, …) | Yes | Server-side / load-balancer errors. Treated as transient by the SDK. |
+| HTTP 408 `Request Timeout` | Yes | Server-side timeout; the SDK retries with backoff. |
+| `Throttling` / `ThrottlingException` / `RequestThrottled*` / `TooManyRequestsException` / `ProvisionedThroughputExceededException` / `RequestLimitExceeded` / `SlowDown` | Yes | AWS throttling family. Adaptive mode also slows the next request via the token bucket. |
+| `RequestTimeout` / network errors / connection resets | Yes | Local socket / connection errors. |
+| HTTP 4xx other than 408 (`400`, `401`, `403`, `404`, `409`, `412`, …) | No | Caller-side errors (bad request, missing object, permissions). Surfaced immediately. |
+| `OperationCanceledException` / `TaskCanceledException` | No | Cancellation propagates without retry. |
+
+The schedule is owned by the SDK: it uses exponential backoff with jitter
+inside `MaxErrorRetry` retries. When `--retry-max-attempts` is `1` the SDK
+performs zero retries (the first attempt is the only one). The SDK's
+`TransferUtility` retries individual multipart parts on its own — under
+`--retry-max-attempts 3` a single failing part can be re-uploaded up to
+three times without restarting the whole multi-GiB upload.
+
+```powershell
+osvfs `
+  --bucket my-bucket `
+  --root-folder C:\Users\you\OSVFS `
+  --retry-max-attempts 5         # 5 total attempts (1 initial + 4 retries)
+```
 
 ### Change detection modes
 
@@ -444,6 +477,7 @@ bandwidth-up         = "5M"                      # optional, "0" / omit = unlimi
 bandwidth-down       = "10M"                     # optional, "0" / omit = unlimited
 multipart-threshold  = "8M"                      # optional
 multipart-part-size  = "16M"                     # optional, 5M..5G
+retry-max-attempts   = 3                         # optional, 1 disables retries
 log-format           = "text"                    # optional, "text" or "json"
 allow-unversioned    = false                     # DANGER: skip the bucket-versioning safety check
 verbose              = false

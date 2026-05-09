@@ -72,6 +72,12 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     private readonly IRateLimiter? downLimiter;
 
     /// <summary>
+    /// Default attempt count when the host does not pass an explicit override.
+    /// Matches the SDK's historical default (one initial attempt + two retries).
+    /// </summary>
+    public const int DefaultRetryMaxAttempts = 3;
+
+    /// <summary>
     /// Creates a backend bound to <paramref name="bucketName"/>. <paramref name="endpointUrl"/>
     /// switches the client into path-style addressing (LocalStack/MinIO); <paramref name="region"/>
     /// drives request signing; <paramref name="credentials"/> short-circuits the SDK chain.
@@ -79,6 +85,9 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     /// bandwidth ceilings; either may be null to disable that direction.
     /// <paramref name="multipartThresholdBytes"/> / <paramref name="multipartPartSizeBytes"/>
     /// override the multipart routing knobs; null falls back to the defaults.
+    /// <paramref name="retryMaxAttempts"/> sets the total attempt count the SDK
+    /// will make for transient failures (initial + retries). Null falls back to
+    /// <see cref="DefaultRetryMaxAttempts"/>; <c>1</c> disables retries.
     /// </summary>
     public S3Backend(
         string bucketName,
@@ -89,7 +98,8 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
         IRateLimiter? upLimiter = null,
         IRateLimiter? downLimiter = null,
         long? multipartThresholdBytes = null,
-        long? multipartPartSizeBytes = null)
+        long? multipartPartSizeBytes = null,
+        int? retryMaxAttempts = null)
     {
         this.bucketName = bucketName;
         this.keyPrefix = KeyPath.NormalizeKeyPrefix(keyPrefix);
@@ -97,7 +107,8 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
         this.downLimiter = downLimiter;
         var threshold = multipartThresholdBytes ?? DefaultMultipartThresholdBytes;
         multipartPartSize = multipartPartSizeBytes ?? DefaultMultipartPartSizeBytes;
-        client = CreateClient(endpointUrl, region, credentials);
+        var attempts = retryMaxAttempts ?? DefaultRetryMaxAttempts;
+        client = CreateClient(endpointUrl, region, credentials, attempts);
         // Share a single TransferUtility per backend: it's documented thread-safe, holds no
         // upload-specific state, and disposes only its internally-created client (not ours).
         transferUtility = new TransferUtility(client, new TransferUtilityConfig
@@ -693,12 +704,28 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     /// <summary>
     /// Builds the underlying S3 client. Endpoint overrides flip on path-style
     /// addressing and relax the v4 SDK's checksum negotiation for S3-compatible servers.
+    /// Retry behavior is delegated to the SDK pipeline: <see cref="RequestRetryMode.Adaptive"/>
+    /// uses the SDK's adaptive client-side throttling (token-bucket) policy and
+    /// <see cref="ClientConfig.MaxErrorRetry"/> caps the number of retries the
+    /// SDK performs on transient failures (5xx, throttling, network errors).
     /// </summary>
-    private static AmazonS3Client CreateClient(string? endpointUrl, string? region, AwsCredential? credentials)
+    private static AmazonS3Client CreateClient(
+        string? endpointUrl,
+        string? region,
+        AwsCredential? credentials,
+        int retryMaxAttempts)
     {
         var config = new AmazonS3Config
         {
             ForcePathStyle = endpointUrl is not null,
+            // Adaptive enables the SDK's client-side throttling token bucket on top of
+            // the standard retry classifier (5xx / RequestTimeout / Throttling / SlowDown
+            // / network errors). 4xx responses bypass the retry handler.
+            RetryMode = RequestRetryMode.Adaptive,
+            // MaxErrorRetry counts retries AFTER the first attempt, so the total attempt
+            // budget (initial + retries) is MaxErrorRetry + 1. Clamp to >= 0 so a caller
+            // passing 1 (= retries disabled) cannot underflow the SDK's expected range.
+            MaxErrorRetry = Math.Max(0, retryMaxAttempts - 1),
         };
         if (!string.IsNullOrEmpty(endpointUrl))
         {

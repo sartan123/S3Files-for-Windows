@@ -107,6 +107,11 @@ var allowUnversionedOption = new Option<bool>("--allow-unversioned")
     Description = "DANGER: Skip the bucket-versioning safety check and run against a bucket without versioning. Local edits and deletes become unrecoverable. Intended for CI / disposable buckets only.",
 };
 
+var retryMaxAttemptsOption = new Option<int?>("--retry-max-attempts")
+{
+    Description = "Total attempts (initial + retries) the AWS SDK makes on transient failures (5xx, request timeouts, throttling, network errors). Defaults to 3. 1 disables retries; 4xx errors fail immediately regardless.",
+};
+
 var credentialStore = new WindowsCredentialStore();
 
 var rootCommand = new RootCommand("OSVFS — Object Storage Virtual File System for Windows: mount a cloud object-store bucket/container as a local folder via ProjFS.")
@@ -130,6 +135,7 @@ var rootCommand = new RootCommand("OSVFS — Object Storage Virtual File System 
     multipartPartSizeOption,
     logFormatOption,
     allowUnversionedOption,
+    retryMaxAttemptsOption,
 };
 
 rootCommand.Subcommands.Add(CredentialsCommandFactory.Build(credentialStore));
@@ -210,6 +216,15 @@ rootCommand.SetAction(parseResult =>
         return ExitGeneralException;
     }
 
+    var retryMaxAttempts = parseResult.GetValue(retryMaxAttemptsOption) ?? fileConfig?.RetryMaxAttempts;
+    if (retryMaxAttempts is < 1)
+    {
+        logger.LogError(
+            "--retry-max-attempts must be at least 1 (got {Value}).",
+            retryMaxAttempts);
+        return ExitGeneralException;
+    }
+
     var changeSource = parseResult.GetValue(changeSourceOption)
         ?? fileConfig?.ChangeSource
         ?? ChangeSourceKind.Polling;
@@ -257,6 +272,7 @@ rootCommand.SetAction(parseResult =>
         BandwidthLimits = bandwidthLimits,
         MultipartThresholdBytes = multipartThresholdBytes,
         MultipartPartSizeBytes = multipartPartSizeBytes,
+        RetryMaxAttempts = retryMaxAttempts,
         AllowUnversioned = GetCliBool(parseResult, allowUnversionedOption) ?? fileConfig?.AllowUnversioned ?? false,
     };
 

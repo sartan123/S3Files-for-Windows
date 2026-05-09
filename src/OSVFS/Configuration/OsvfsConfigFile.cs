@@ -104,6 +104,12 @@ internal sealed class OsvfsConfigFile
     public LogFormat? LogFormat { get; init; }
 
     /// <summary>
+    /// Total attempts (initial + retries) the AWS SDK makes on transient
+    /// failures. Null falls back to the backend default.
+    /// </summary>
+    public int? RetryMaxAttempts { get; init; }
+
+    /// <summary>
     /// When true, skip the bucket-versioning safety check and instead emit a
     /// repeated warning. Intended for CI / disposable buckets only.
     /// </summary>
@@ -134,6 +140,7 @@ internal sealed class OsvfsConfigFile
         MultipartThreshold = overlay.MultipartThreshold ?? MultipartThreshold,
         MultipartPartSize = overlay.MultipartPartSize ?? MultipartPartSize,
         LogFormat = overlay.LogFormat ?? LogFormat,
+        RetryMaxAttempts = overlay.RetryMaxAttempts ?? RetryMaxAttempts,
         AllowUnversioned = overlay.AllowUnversioned ?? AllowUnversioned,
     };
 }

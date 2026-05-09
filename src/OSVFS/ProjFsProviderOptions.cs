@@ -100,6 +100,13 @@ internal sealed class ProjFsProviderOptions
     public long? MultipartPartSizeBytes { get; init; }
 
     /// <summary>
+    /// Total attempts (initial + retries) the AWS SDK makes on transient
+    /// failures. Null falls back to the backend default; <c>1</c> disables
+    /// retries.
+    /// </summary>
+    public int? RetryMaxAttempts { get; init; }
+
+    /// <summary>
     /// When true, skip the bucket-versioning safety check and instead emit a
     /// repeated warning. Intended for CI / disposable buckets only.
     /// </summary>

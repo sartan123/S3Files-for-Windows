@@ -126,6 +126,7 @@ internal static class OsvfsConfigFileLoader
             MultipartThreshold = ReadString(table, "multipart-threshold", "multipart_threshold", sourcePath),
             MultipartPartSize = ReadString(table, "multipart-part-size", "multipart_part_size", sourcePath),
             LogFormat = ReadLogFormat(table, sourcePath),
+            RetryMaxAttempts = ReadInt(table, "retry-max-attempts", "retry_max_attempts", sourcePath),
             AllowUnversioned = ReadBool(table, "allow-unversioned", "allow_unversioned", sourcePath),
         };
     }

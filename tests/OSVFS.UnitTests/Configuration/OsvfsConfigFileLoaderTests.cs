@@ -254,6 +254,35 @@ public class OsvfsConfigFileLoaderTests
     }
 
     [Fact]
+    public void Parse_retry_max_attempts_kebab_and_snake_aliases_accepted()
+    {
+        var kebab = OsvfsConfigFileLoader.ParseContent("retry-max-attempts = 5", "test.toml");
+        var snake = OsvfsConfigFileLoader.ParseContent("retry_max_attempts = 7", "test.toml");
+
+        Assert.Equal(5, kebab.RetryMaxAttempts);
+        Assert.Equal(7, snake.RetryMaxAttempts);
+    }
+
+    [Fact]
+    public void Parse_retry_max_attempts_type_mismatch_throws()
+    {
+        var ex = Assert.Throws<OsvfsConfigException>(() =>
+            OsvfsConfigFileLoader.ParseContent("retry-max-attempts = \"5\"", "test.toml"));
+        Assert.Contains("retry-max-attempts", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MergeOverlay_retry_max_attempts_overrides_user_value()
+    {
+        var user = new OsvfsConfigFile { RetryMaxAttempts = 3 };
+        var project = new OsvfsConfigFile { RetryMaxAttempts = 8 };
+
+        var merged = user.MergeOverlay(project);
+
+        Assert.Equal(8, merged.RetryMaxAttempts);
+    }
+
+    [Fact]
     public void MergeOverlay_overlay_overrides_user_per_key()
     {
         var user = new OsvfsConfigFile { Bucket = "user", Region = "us-east-1" };
