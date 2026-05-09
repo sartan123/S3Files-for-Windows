@@ -1,9 +1,11 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Windows.ProjFS;
+using OSVFS.Configuration;
 using OSVFS.ObjectStore;
 using OSVFS.Sync;
 using OSVFS.Sync.ProjFs;
+using OSVFS.Sync.Sqs;
 using System.Collections.Concurrent;
 
 namespace OSVFS.ProjFs;
@@ -459,7 +461,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
 
     /// <summary>
     /// Builds the change watcher and its collaborators, or returns null when the
-    /// configuration disables it (read-only mode or non-positive interval).
+    /// configuration disables it (read-only mode or polling-only with a non-positive interval).
     /// </summary>
     private ObjectStoreChangeWatcher? CreateChangeWatcher()
     {
@@ -472,11 +474,12 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             return null;
         }
 
-        if (Options.SyncIntervalSeconds <= 0)
+        var changeSource = CreateChangeSource();
+        if (changeSource is null)
         {
             logger.LogInformation(
-                "Sync interval is {Interval}s; object-store change watcher disabled.",
-                Options.SyncIntervalSeconds);
+                "No active change source for {Mode} (sync interval = {Interval}s); object-store change watcher disabled.",
+                Options.ChangeSource, Options.SyncIntervalSeconds);
             return null;
         }
 
@@ -489,11 +492,55 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
             loggerFactory.CreateLogger<LostAndFoundQuarantine>());
 
         return new ObjectStoreChangeWatcher(
-            backend,
+            changeSource,
             sink,
             quarantine,
-            TimeSpan.FromSeconds(Options.SyncIntervalSeconds),
             loggerFactory.CreateLogger<ObjectStoreChangeWatcher>());
+    }
+
+    /// <summary>
+    /// Constructs the <see cref="IChangeSource"/> implied by
+    /// <c>--change-source</c> and the supporting options. Returns null when the
+    /// selected source is itself disabled (polling mode with a zero interval),
+    /// so the caller can suppress watcher startup.
+    /// </summary>
+    private IChangeSource? CreateChangeSource()
+    {
+        switch (Options.ChangeSource)
+        {
+            case ChangeSourceKind.Polling:
+                if (Options.SyncIntervalSeconds <= 0)
+                {
+                    logger.LogInformation(
+                        "Sync interval is {Interval}s; polling change source disabled.",
+                        Options.SyncIntervalSeconds);
+                    return null;
+                }
+                return new PollingChangeSource(
+                    backend,
+                    TimeSpan.FromSeconds(Options.SyncIntervalSeconds),
+                    loggerFactory.CreateLogger<PollingChangeSource>());
+
+            case ChangeSourceKind.Events:
+                if (string.IsNullOrEmpty(Options.EventQueue))
+                {
+                    // Program.cs validates this earlier; defensive guard for tests / library callers.
+                    throw new InvalidOperationException(
+                        "--change-source 'events' requires an SQS queue (--event-queue).");
+                }
+                return SqsChangeSourceFactory.Create(
+                    Options.EventQueue!,
+                    Options.Bucket,
+                    Options.KeyPrefix,
+                    Options.EndpointUrl,
+                    Options.Region,
+                    Options.Credentials,
+                    loggerFactory.CreateLogger<SqsChangeSource>());
+
+            default:
+                throw new InvalidOperationException(
+                    $"Unknown change source '{Options.ChangeSource}'.");
+        }
     }
 
     /// <summary>

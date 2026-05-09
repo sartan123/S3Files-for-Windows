@@ -57,6 +57,16 @@ var syncIntervalOption = new Option<int?>("--sync-interval-seconds")
     Description = "Polling interval (seconds) for detecting external S3 changes. 0 disables.",
 };
 
+var changeSourceOption = new Option<ChangeSourceKind?>("--change-source")
+{
+    Description = "Strategy for detecting external object-store changes: 'polling' (re-list bucket on --sync-interval-seconds) or 'events' (long-poll an SQS queue carrying EventBridge S3 notifications; requires --event-queue).",
+};
+
+var eventQueueOption = new Option<string?>("--event-queue")
+{
+    Description = "SQS queue URL or queue name carrying EventBridge S3 notifications for the bucket. Required when --change-source is 'events'. See README for the necessary EventBridge rule + IAM policy.",
+};
+
 var awsProfileOption = new Option<string?>("--aws-profile")
 {
     Description = "Use credentials previously saved by 'osvfs credentials set --profile <name>' (encrypted with DPAPI in Windows Credential Manager).",
@@ -105,6 +115,8 @@ var rootCommand = new RootCommand("OSVFS — Object Storage Virtual File System 
     verboseOption,
     readOnlyOption,
     syncIntervalOption,
+    changeSourceOption,
+    eventQueueOption,
     awsProfileOption,
     bandwidthUpOption,
     bandwidthDownOption,
@@ -192,6 +204,18 @@ rootCommand.SetAction(parseResult =>
         return ExitGeneralException;
     }
 
+    var changeSource = parseResult.GetValue(changeSourceOption)
+        ?? fileConfig?.ChangeSource
+        ?? ChangeSourceKind.Polling;
+    var eventQueue = parseResult.GetValue(eventQueueOption) ?? fileConfig?.EventQueue;
+    if (changeSource is ChangeSourceKind.Events && string.IsNullOrEmpty(eventQueue))
+    {
+        logger.LogError(
+            "--change-source 'events' requires --event-queue (an SQS queue URL or name). " +
+            "See README for the necessary S3 → EventBridge → SQS setup.");
+        return ExitGeneralException;
+    }
+
     var options = new ProjFsProviderOptions
     {
         Provider = parseResult.GetValue(providerOption) ?? fileConfig?.Provider ?? ObjectStoreProvider.S3,
@@ -203,6 +227,8 @@ rootCommand.SetAction(parseResult =>
         Verbose = verbose,
         ReadOnly = GetCliBool(parseResult, readOnlyOption) ?? fileConfig?.ReadOnly ?? false,
         SyncIntervalSeconds = parseResult.GetValue(syncIntervalOption) ?? fileConfig?.SyncIntervalSeconds ?? 30,
+        ChangeSource = parseResult.GetValue(changeSourceOption) ?? fileConfig?.ChangeSource ?? ChangeSourceKind.Polling,
+        EventQueue = parseResult.GetValue(eventQueueOption) ?? fileConfig?.EventQueue,
         Credentials = credentials,
         BandwidthLimits = bandwidthLimits,
         MultipartThresholdBytes = multipartThresholdBytes,

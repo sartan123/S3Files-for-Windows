@@ -41,8 +41,20 @@
 # aws-profile = "prod"
 
 # Polling interval (seconds) for detecting external object-store changes.
-# 0 disables the watcher.
+# 0 disables the watcher when change-source = "polling".
 # sync-interval-seconds = 30
+
+# Strategy for detecting external object-store changes.
+#   "polling" (default) — re-list the bucket every sync-interval-seconds.
+#   "events"            — long-poll an SQS queue carrying EventBridge S3
+#                         notifications. Requires event-queue (below) and the
+#                         server-side EventBridge rule + IAM policy described
+#                         in the README.
+# change-source = "polling"
+
+# SQS queue URL or queue name carrying EventBridge S3 notifications.
+# Required when change-source is "events".
+# event-queue = "https://sqs.ap-northeast-1.amazonaws.com/123456789012/osvfs-changes"
 
 # Upload bandwidth ceiling. Plain bytes/s by default; suffixes K/M/G mean
 # KiB/s, MiB/s, GiB/s (e.g. "5M" = 5 MiB/s). Omit or set to "0" to disable.

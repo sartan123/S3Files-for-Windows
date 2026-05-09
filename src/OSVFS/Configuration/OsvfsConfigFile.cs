@@ -55,6 +55,16 @@ internal sealed class OsvfsConfigFile
     public int? SyncIntervalSeconds { get; init; }
 
     /// <summary>
+    /// Which change-detection strategy the watcher uses (polling or events).
+    /// </summary>
+    public ChangeSourceKind? ChangeSource { get; init; }
+
+    /// <summary>
+    /// SQS queue URL or queue name carrying EventBridge S3 notifications.
+    /// </summary>
+    public string? EventQueue { get; init; }
+
+    /// <summary>
     /// Profile name in the OSVFS credential store; null means use the SDK's default chain.
     /// </summary>
     public string? AwsProfile { get; init; }
@@ -108,6 +118,8 @@ internal sealed class OsvfsConfigFile
         Verbose = overlay.Verbose ?? Verbose,
         ReadOnly = overlay.ReadOnly ?? ReadOnly,
         SyncIntervalSeconds = overlay.SyncIntervalSeconds ?? SyncIntervalSeconds,
+        ChangeSource = overlay.ChangeSource ?? ChangeSource,
+        EventQueue = overlay.EventQueue ?? EventQueue,
         AwsProfile = overlay.AwsProfile ?? AwsProfile,
         BandwidthUp = overlay.BandwidthUp ?? BandwidthUp,
         BandwidthDown = overlay.BandwidthDown ?? BandwidthDown,

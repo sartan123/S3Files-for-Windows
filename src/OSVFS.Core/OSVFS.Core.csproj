@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <PackageReference Include="AWSSDK.S3" />
+    <PackageReference Include="AWSSDK.SQS" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 

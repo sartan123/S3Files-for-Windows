@@ -117,6 +117,8 @@ internal static class OsvfsConfigFileLoader
             Verbose = ReadBool(table, "verbose", sourcePath),
             ReadOnly = ReadBool(table, "read-only", "read_only", sourcePath),
             SyncIntervalSeconds = ReadInt(table, "sync-interval-seconds", "sync_interval_seconds", sourcePath),
+            ChangeSource = ReadChangeSource(table, sourcePath),
+            EventQueue = ReadString(table, "event-queue", "event_queue", sourcePath),
             AwsProfile = ReadString(table, "aws-profile", "aws_profile", sourcePath),
             BandwidthUp = ReadString(table, "bandwidth-up", "bandwidth_up", sourcePath),
             BandwidthDown = ReadString(table, "bandwidth-down", "bandwidth_down", sourcePath),
@@ -221,6 +223,21 @@ internal static class OsvfsConfigFileLoader
         throw new OsvfsConfigException(
             $"OSVFS config file '{sourcePath}': unknown log-format '{raw}'. Expected one of: " +
             string.Join(", ", Enum.GetNames<LogFormat>()).ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// Reads <c>change-source</c> as a case-insensitive enum literal. Accepts the
+    /// same tokens as the <c>--change-source</c> CLI flag.
+    /// </summary>
+    private static ChangeSourceKind? ReadChangeSource(TomlTable table, string sourcePath)
+    {
+        var raw = ReadString(table, "change-source", "change_source", sourcePath);
+        if (raw is null) return null;
+        if (Enum.TryParse<ChangeSourceKind>(raw, ignoreCase: true, out var parsed))
+            return parsed;
+        throw new OsvfsConfigException(
+            $"OSVFS config file '{sourcePath}': unknown change-source '{raw}'. Expected one of: " +
+            string.Join(", ", Enum.GetNames<ChangeSourceKind>()).ToLowerInvariant());
     }
 }
 
