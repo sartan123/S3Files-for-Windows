@@ -76,4 +76,10 @@ internal sealed class ProjFsProviderOptions
     /// Per-part size used by the multipart upload path. Null falls back to the backend default.
     /// </summary>
     public long? MultipartPartSizeBytes { get; init; }
+
+    /// <summary>
+    /// When true, skip the bucket-versioning safety check and instead emit a
+    /// repeated warning. Intended for CI / disposable buckets only.
+    /// </summary>
+    public bool AllowUnversioned { get; init; }
 }

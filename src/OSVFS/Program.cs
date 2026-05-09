@@ -87,6 +87,11 @@ var logFormatOption = new Option<LogFormat?>("--log-format")
     Description = "Console log output format. 'text' (default) writes single-line human-readable output; 'json' writes one JSON object per line with UTC timestamps for log shippers (Datadog, Loki, etc.).",
 };
 
+var allowUnversionedOption = new Option<bool>("--allow-unversioned")
+{
+    Description = "DANGER: Skip the bucket-versioning safety check and run against a bucket without versioning. Local edits and deletes become unrecoverable. Intended for CI / disposable buckets only.",
+};
+
 var credentialStore = new WindowsCredentialStore();
 
 var rootCommand = new RootCommand("OSVFS — Object Storage Virtual File System for Windows: mount a cloud object-store bucket/container as a local folder via ProjFS.")
@@ -106,6 +111,7 @@ var rootCommand = new RootCommand("OSVFS — Object Storage Virtual File System 
     multipartThresholdOption,
     multipartPartSizeOption,
     logFormatOption,
+    allowUnversionedOption,
 };
 
 rootCommand.Subcommands.Add(CredentialsCommandFactory.Build(credentialStore));
@@ -201,11 +207,20 @@ rootCommand.SetAction(parseResult =>
         BandwidthLimits = bandwidthLimits,
         MultipartThresholdBytes = multipartThresholdBytes,
         MultipartPartSizeBytes = multipartPartSizeBytes,
+        AllowUnversioned = GetCliBool(parseResult, allowUnversionedOption) ?? fileConfig?.AllowUnversioned ?? false,
     };
 
     try
     {
         return RunProvider(options, loggerFactory, logger);
+    }
+    catch (BucketVersioningNotEnabledException ex)
+    {
+        // The exception's message is the user-facing remediation banner — log it as a
+        // single error so the copy-paste fix command lands intact in the terminal,
+        // without the stack trace chrome a generic critical log would add.
+        logger.LogError("{Message}", ex.Message);
+        return ExitGeneralException;
     }
     catch (Exception ex)
     {

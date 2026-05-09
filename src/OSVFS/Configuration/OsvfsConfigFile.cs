@@ -87,6 +87,12 @@ internal sealed class OsvfsConfigFile
     public LogFormat? LogFormat { get; init; }
 
     /// <summary>
+    /// When true, skip the bucket-versioning safety check and instead emit a
+    /// repeated warning. Intended for CI / disposable buckets only.
+    /// </summary>
+    public bool? AllowUnversioned { get; init; }
+
+    /// <summary>
     /// Returns a copy of this config with values from <paramref name="overlay"/> taking
     /// precedence wherever they are non-null. Used to fold the project-local
     /// <c>osvfs.toml</c> on top of the user-global <c>%APPDATA%/OSVFS/config.toml</c>.
@@ -108,5 +114,6 @@ internal sealed class OsvfsConfigFile
         MultipartThreshold = overlay.MultipartThreshold ?? MultipartThreshold,
         MultipartPartSize = overlay.MultipartPartSize ?? MultipartPartSize,
         LogFormat = overlay.LogFormat ?? LogFormat,
+        AllowUnversioned = overlay.AllowUnversioned ?? AllowUnversioned,
     };
 }
