@@ -1,8 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using OSVFS.ObjectStore;
 using OSVFS.Sync;
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using Xunit;
 
 namespace OSVFS.Core.UnitTests;
@@ -10,68 +9,40 @@ namespace OSVFS.Core.UnitTests;
 public sealed class ObjectStoreChangeWatcherTests
 {
     [Fact]
-    public async Task Poll_with_no_changes_invokes_no_commands()
+    public void Apply_upsert_routes_through_TryUpdateFile()
     {
-        var backend = new FakeBackend();
-        backend.Set("a.txt", "etag-a", 1);
-        backend.Set("b.txt", "etag-b", 2);
-
         var sink = new RecordingSink();
-        var quarantine = new RecordingQuarantine();
-        var watcher = NewWatcher(backend, sink, quarantine);
+        var watcher = NewWatcher(new FakeChangeSource(), sink, new RecordingQuarantine());
 
-        await watcher.PrimeSnapshotAsync(CancellationToken.None);
-        await watcher.PollOnceAsync(CancellationToken.None);
-
-        Assert.Empty(sink.Calls);
-    }
-
-    [Fact]
-    public async Task Poll_detects_new_object_and_writes_placeholder()
-    {
-        var backend = new FakeBackend();
-        var sink = new RecordingSink();
-        var watcher = NewWatcher(backend, sink, new RecordingQuarantine());
-
-        await watcher.PrimeSnapshotAsync(CancellationToken.None);
-        backend.Set("docs/new.txt", "etag-1", 5);
-        await watcher.PollOnceAsync(CancellationToken.None);
-
-        var call = Assert.Single(sink.Calls);
-        Assert.Equal("WritePlaceholder", call.Op);
-        Assert.Equal("docs\\new.txt", call.Path);
-        Assert.Equal(5, call.Size);
-    }
-
-    [Fact]
-    public async Task Poll_detects_modified_object_and_calls_update()
-    {
-        var backend = new FakeBackend();
-        backend.Set("file.txt", "etag-old", 1);
-        var sink = new RecordingSink();
-        var watcher = NewWatcher(backend, sink, new RecordingQuarantine());
-
-        await watcher.PrimeSnapshotAsync(CancellationToken.None);
-        backend.Set("file.txt", "etag-new", 2);
-        await watcher.PollOnceAsync(CancellationToken.None);
+        watcher.ApplyForTesting(Upsert("file.txt", "etag-1", 100));
 
         var call = Assert.Single(sink.Calls);
         Assert.Equal("UpdateFile", call.Op);
         Assert.Equal("file.txt", call.Path);
-        Assert.Equal(2, call.Size);
+        Assert.Equal(100, call.Size);
     }
 
     [Fact]
-    public async Task Poll_detects_deleted_object_and_calls_delete()
+    public void Apply_upsert_when_TryUpdateFile_returns_NotFound_falls_back_to_WritePlaceholder()
     {
-        var backend = new FakeBackend();
-        backend.Set("gone.txt", "etag-1", 1);
-        var sink = new RecordingSink();
-        var watcher = NewWatcher(backend, sink, new RecordingQuarantine());
+        var sink = new RecordingSink { UpdateFileResult = ProjFsUpdateOutcome.NotFound };
+        var watcher = NewWatcher(new FakeChangeSource(), sink, new RecordingQuarantine());
 
-        await watcher.PrimeSnapshotAsync(CancellationToken.None);
-        backend.Remove("gone.txt");
-        await watcher.PollOnceAsync(CancellationToken.None);
+        watcher.ApplyForTesting(Upsert("docs/new.txt", "etag", 5));
+
+        Assert.Collection(
+            sink.Calls,
+            c => Assert.Equal("UpdateFile", c.Op),
+            c => { Assert.Equal("WritePlaceholder", c.Op); Assert.Equal(5, c.Size); });
+    }
+
+    [Fact]
+    public void Apply_delete_routes_through_TryDeleteFile_with_disallow_dirty()
+    {
+        var sink = new RecordingSink();
+        var watcher = NewWatcher(new FakeChangeSource(), sink, new RecordingQuarantine());
+
+        watcher.ApplyForTesting(Delete("gone.txt"));
 
         var call = Assert.Single(sink.Calls);
         Assert.Equal("DeleteFile", call.Op);
@@ -80,25 +51,15 @@ public sealed class ObjectStoreChangeWatcherTests
     }
 
     [Fact]
-    public async Task Conflict_on_update_quarantines_and_force_replaces()
+    public void Conflict_on_upsert_quarantines_then_force_replaces()
     {
-        var backend = new FakeBackend();
-        backend.Set("conflict.txt", "etag-old", 1);
-
-        var sink = new RecordingSink();
-        sink.UpdateFileResult = ProjFsUpdateOutcome.DirtyConflict;
-
+        var sink = new RecordingSink { UpdateFileResult = ProjFsUpdateOutcome.DirtyConflict };
         var quarantine = new RecordingQuarantine();
-        var watcher = NewWatcher(backend, sink, quarantine);
+        var watcher = NewWatcher(new FakeChangeSource(), sink, quarantine);
 
-        await watcher.PrimeSnapshotAsync(CancellationToken.None);
-        backend.Set("conflict.txt", "etag-new", 99);
-        await watcher.PollOnceAsync(CancellationToken.None);
+        watcher.ApplyForTesting(Upsert("conflict.txt", "etag-new", 99));
 
-        // Spec: the dirty local copy goes to lost+found, then the placeholder is force-deleted
-        // and re-created with the remote version.
         Assert.Equal(new[] { "conflict.txt" }, quarantine.Quarantined);
-
         Assert.Collection(
             sink.Calls,
             c => Assert.Equal("UpdateFile", c.Op),
@@ -107,189 +68,179 @@ public sealed class ObjectStoreChangeWatcherTests
     }
 
     [Fact]
-    public async Task Conflict_on_delete_quarantines_and_force_deletes_without_recreating()
+    public void Conflict_on_delete_quarantines_and_force_deletes_without_recreating()
     {
-        var backend = new FakeBackend();
-        backend.Set("doomed.txt", "etag-1", 1);
-
-        var sink = new RecordingSink();
-        sink.DeleteFileResult = ProjFsUpdateOutcome.DirtyConflict;
-
-        var quarantine = new RecordingQuarantine();
-        var watcher = NewWatcher(backend, sink, quarantine);
-
-        await watcher.PrimeSnapshotAsync(CancellationToken.None);
-        backend.Remove("doomed.txt");
-
-        // Allow the second (force) delete to succeed even though the first is configured to conflict.
+        var sink = new RecordingSink { DeleteFileResult = ProjFsUpdateOutcome.DirtyConflict };
         sink.OverrideOnNthDelete[2] = ProjFsUpdateOutcome.Updated;
-        await watcher.PollOnceAsync(CancellationToken.None);
+        var quarantine = new RecordingQuarantine();
+        var watcher = NewWatcher(new FakeChangeSource(), sink, quarantine);
+
+        watcher.ApplyForTesting(Delete("doomed.txt"));
 
         Assert.Equal(new[] { "doomed.txt" }, quarantine.Quarantined);
         Assert.Collection(
             sink.Calls,
             c => { Assert.Equal("DeleteFile", c.Op); Assert.False(c.AllowDirty); },
             c => { Assert.Equal("DeleteFile", c.Op); Assert.True(c.AllowDirty); });
-        // No placeholder re-creation: object is gone in the remote store.
     }
 
     [Fact]
-    public async Task RecordLocalUpload_prevents_self_trigger_on_next_poll()
+    public void RecordLocalUpload_suppresses_matching_event_emitted_immediately_after()
     {
-        var backend = new FakeBackend();
+        // Self-suppression covers the SQS-style case where the events stream loops our own
+        // write back at us. The watcher's recent-mutation map drops events whose ETag matches
+        // a recent local upload.
         var sink = new RecordingSink();
-        var watcher = NewWatcher(backend, sink, new RecordingQuarantine());
+        var watcher = NewWatcher(new FakeChangeSource(), sink, new RecordingQuarantine());
 
-        await watcher.PrimeSnapshotAsync(CancellationToken.None);
-
-        // Simulate: we just uploaded the file ourselves.
-        var lastModified = DateTimeOffset.UtcNow;
-        backend.Set("local.txt", "etag-from-upload", 42, lastModified);
-        watcher.RecordLocalUpload("local.txt", "etag-from-upload", 42, lastModified);
-
-        await watcher.PollOnceAsync(CancellationToken.None);
+        watcher.RecordLocalUpload("local.txt", "etag-x", 12, DateTimeOffset.UtcNow);
+        watcher.ApplyForTesting(Upsert("local.txt", "etag-x", 12));
 
         Assert.Empty(sink.Calls);
     }
 
     [Fact]
-    public async Task BeginLocalKeyChange_skips_key_in_concurrent_poll()
+    public void RecordLocalUpload_does_not_suppress_event_with_different_etag()
     {
-        var backend = new FakeBackend();
-        backend.Set("inflight.txt", "etag-old", 1);
-
         var sink = new RecordingSink();
-        var watcher = NewWatcher(backend, sink, new RecordingQuarantine());
-        await watcher.PrimeSnapshotAsync(CancellationToken.None);
+        var watcher = NewWatcher(new FakeChangeSource(), sink, new RecordingQuarantine());
 
-        // Remote ETag changed (because we are mid-upload), but our local-change token tells the
-        // watcher to ignore this key for the current cycle.
-        backend.Set("inflight.txt", "etag-new", 2);
-        using (var _ = watcher.BeginLocalKeyChange("inflight.txt"))
-        {
-            await watcher.PollOnceAsync(CancellationToken.None);
-        }
+        watcher.RecordLocalUpload("local.txt", "etag-old", 12, DateTimeOffset.UtcNow);
+        watcher.ApplyForTesting(Upsert("local.txt", "etag-new", 99));
+
+        var call = Assert.Single(sink.Calls);
+        Assert.Equal("UpdateFile", call.Op);
+        Assert.Equal(99, call.Size);
+    }
+
+    [Fact]
+    public void RecordLocalDelete_suppresses_matching_delete_event()
+    {
+        var sink = new RecordingSink();
+        var watcher = NewWatcher(new FakeChangeSource(), sink, new RecordingQuarantine());
+
+        watcher.RecordLocalDelete("doomed.txt");
+        watcher.ApplyForTesting(Delete("doomed.txt"));
 
         Assert.Empty(sink.Calls);
     }
 
     [Fact]
-    public async Task RecordLocalDeletePrefix_clears_snapshot_under_prefix()
+    public async Task StartAsync_pumps_events_from_the_source_until_disposed()
     {
-        var backend = new FakeBackend();
-        backend.Set("dir/a.txt", "e1", 1);
-        backend.Set("dir/sub/b.txt", "e2", 1);
-        backend.Set("other.txt", "e3", 1);
-
+        var source = new FakeChangeSource();
         var sink = new RecordingSink();
-        var watcher = NewWatcher(backend, sink, new RecordingQuarantine());
-        await watcher.PrimeSnapshotAsync(CancellationToken.None);
+        var watcher = NewWatcher(source, sink, new RecordingQuarantine());
 
-        // Local prefix delete: pretend we removed "dir/" from the backend.
-        backend.Remove("dir/a.txt");
-        backend.Remove("dir/sub/b.txt");
-        watcher.RecordLocalDeletePrefix("dir");
+        await watcher.StartAsync(CancellationToken.None);
+        await source.WriteAsync(Upsert("a.txt", "e1", 1));
+        await source.WriteAsync(Delete("b.txt"));
 
-        await watcher.PollOnceAsync(CancellationToken.None);
+        // Give the background pump time to drain.
+        await FakeChangeSource.WaitForApplyCountAsync(sink, 2, TimeSpan.FromSeconds(5));
+        await watcher.DisposeAsync();
 
-        // No DeleteFile calls because we already accounted for our own prefix delete.
-        Assert.Empty(sink.Calls);
+        Assert.Collection(
+            sink.Calls,
+            c => Assert.Equal("UpdateFile", c.Op),
+            c => Assert.Equal("DeleteFile", c.Op));
     }
 
     [Fact]
-    public async Task RecordLocalRename_transposes_snapshot()
+    public void RecordLocalUpload_forwards_to_the_underlying_recorder_when_present()
     {
-        var backend = new FakeBackend();
-        backend.Set("src.txt", "etag-1", 7);
-
+        var source = new FakeChangeSource();
         var sink = new RecordingSink();
-        var watcher = NewWatcher(backend, sink, new RecordingQuarantine());
-        await watcher.PrimeSnapshotAsync(CancellationToken.None);
+        var watcher = NewWatcher(source, sink, new RecordingQuarantine());
 
-        backend.Remove("src.txt");
-        backend.Set("dst.txt", "etag-1", 7);
-        watcher.RecordLocalRename("src.txt", "dst.txt");
+        watcher.RecordLocalUpload("k.txt", "e", 1, DateTimeOffset.UtcNow);
 
-        await watcher.PollOnceAsync(CancellationToken.None);
-
-        // Neither a delete (we removed src.txt locally too) nor a create (we know about dst).
-        Assert.Empty(sink.Calls);
+        Assert.Equal(new[] { "k.txt" }, source.RecordedUploads);
     }
 
     private static ObjectStoreChangeWatcher NewWatcher(
-        IObjectStoreBackend backend, IProjFsCommandSink sink, ILostAndFoundQuarantine quarantine)
-    {
-        return new ObjectStoreChangeWatcher(
-            backend,
+        IChangeSource source, IProjFsCommandSink sink, ILostAndFoundQuarantine quarantine)
+        => new(
+            source,
             sink,
             quarantine,
-            interval: TimeSpan.Zero, // disable background loop; tests drive PollOnceAsync directly
-            logger: NullLogger<ObjectStoreChangeWatcher>.Instance);
-    }
+            NullLogger<ObjectStoreChangeWatcher>.Instance);
+
+    private static ObjectChangeEvent Upsert(string key, string etag, long size) => new(
+        Kind: ObjectChangeKind.Upserted,
+        Key: key,
+        RelativePath: key.Replace('/', '\\'),
+        Size: size,
+        LastModified: DateTimeOffset.UtcNow,
+        ETag: etag);
+
+    private static ObjectChangeEvent Delete(string key) => new(
+        Kind: ObjectChangeKind.Deleted,
+        Key: key,
+        RelativePath: key.Replace('/', '\\'),
+        Size: 0,
+        LastModified: default,
+        ETag: string.Empty);
 
     // ---- Test doubles -----------------------------------------------------------------
 
-    private sealed class FakeBackend : IObjectStoreBackend
+    /// <summary>
+    /// Channel-backed change source. Tests push events with WriteAsync; the watcher
+    /// drains the channel via WatchAsync. Also tracks ILocalMutationRecorder
+    /// forwarding so we can assert RecordLocal* round-trips through the watcher.
+    /// </summary>
+    private sealed class FakeChangeSource : IChangeSource, ILocalMutationRecorder
     {
-        private readonly ConcurrentDictionary<string, ObjectInfo> objects =
-            new(StringComparer.Ordinal);
+        private readonly Channel<ObjectChangeEvent> channel =
+            Channel.CreateUnbounded<ObjectChangeEvent>();
 
-        public void Set(string key, string etag, long size, DateTimeOffset lastModified = default)
-        {
-            objects[key] = new ObjectInfo(
-                Key: key,
-                RelativePath: KeyPath.ToRelativePath(key),
-                Size: size,
-                LastModified: lastModified == default ? DateTimeOffset.UtcNow : lastModified,
-                ETag: etag,
-                IsDirectory: false);
-        }
+        public List<string> RecordedUploads { get; } = new();
+        public List<string> RecordedDeletes { get; } = new();
 
-        public void Remove(string key) => objects.TryRemove(key, out _);
+        public ValueTask WriteAsync(ObjectChangeEvent ev) => channel.Writer.WriteAsync(ev);
 
-        public IAsyncEnumerable<ObjectInfo> ListAllAsync(CancellationToken ct) =>
-            EnumerateAsync(ct);
+        public IAsyncEnumerable<ObjectChangeEvent> WatchAsync(CancellationToken ct) =>
+            ReadAllAsync(ct);
 
-        private async IAsyncEnumerable<ObjectInfo> EnumerateAsync(
+        private async IAsyncEnumerable<ObjectChangeEvent> ReadAllAsync(
             [EnumeratorCancellation] CancellationToken ct)
         {
-            foreach (var kv in objects.ToArray())
+            await foreach (var ev in channel.Reader.ReadAllAsync(ct))
             {
-                ct.ThrowIfCancellationRequested();
-                yield return kv.Value;
-                await Task.Yield();
+                yield return ev;
             }
         }
 
-        // Unused by the watcher.
-        public IAsyncEnumerable<ObjectInfo> ListAsync(string r, CancellationToken c) =>
-            throw new NotImplementedException();
-        public IAsyncEnumerable<ObjectInfo> ListRecursiveAsync(string r, CancellationToken c) =>
-            throw new NotImplementedException();
-        public Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken c) =>
-            throw new NotImplementedException();
-        public Task<ObjectInfo?> HeadAsync(string r, CancellationToken c) =>
-            throw new NotImplementedException();
-        public Task ReadRangeAsync(string r, long o, long l, Stream d, CancellationToken c) =>
-            throw new NotImplementedException();
-        public Task<UploadResult> UploadAsync(string r, Stream s, string? e, CancellationToken c) =>
-            throw new NotImplementedException();
-        public Task DeleteAsync(string r, CancellationToken c) =>
-            throw new NotImplementedException();
-        public Task DeletePrefixAsync(string r, CancellationToken c) =>
-            throw new NotImplementedException();
-        public Task RenameAsync(string a, string b, CancellationToken c) =>
-            throw new NotImplementedException();
-        public Task RenamePrefixAsync(string a, string b, CancellationToken c) =>
-            throw new NotImplementedException();
+        public ValueTask DisposeAsync()
+        {
+            channel.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
 
-        public void Dispose() { }
+        public void RecordLocalUpload(string objectKey, string etag, long size, DateTimeOffset lastModified)
+            => RecordedUploads.Add(objectKey);
+        public void RecordLocalDelete(string objectKey) => RecordedDeletes.Add(objectKey);
+        public void RecordLocalDeletePrefix(string objectKeyPrefix) { }
+        public void RecordLocalRename(string oldKey, string newKey) { }
+        public void RecordLocalRenamePrefix(string oldPrefix, string newPrefix) { }
+        public IDisposable BeginLocalKeyChange(string objectKey) => Disposable.Empty;
+        public IDisposable BeginLocalPrefixChange(string objectKeyPrefix) => Disposable.Empty;
+
+        public static async Task WaitForApplyCountAsync(RecordingSink sink, int target, TimeSpan timeout)
+        {
+            var start = DateTime.UtcNow;
+            while (sink.Calls.Count < target && DateTime.UtcNow - start < timeout)
+            {
+                await Task.Delay(10);
+            }
+        }
     }
 
     private sealed record SinkCall(string Op, string Path, long Size, bool AllowDirty);
 
     private sealed class RecordingSink : IProjFsCommandSink
     {
+        private readonly object gate = new();
         public List<SinkCall> Calls { get; } = new();
 
         public bool WritePlaceholderResult { get; set; } = true;
@@ -303,22 +254,27 @@ public sealed class ObjectStoreChangeWatcherTests
         public bool TryWritePlaceholder(
             string relativePath, long size, DateTimeOffset lastModified, byte[] contentId, bool isDirectory)
         {
-            Calls.Add(new SinkCall("WritePlaceholder", relativePath, size, false));
+            lock (gate) { Calls.Add(new SinkCall("WritePlaceholder", relativePath, size, false)); }
             return WritePlaceholderResult;
         }
 
         public ProjFsUpdateOutcome TryUpdateFile(
             string relativePath, long size, DateTimeOffset lastModified, byte[] contentId)
         {
-            Calls.Add(new SinkCall("UpdateFile", relativePath, size, false));
+            lock (gate) { Calls.Add(new SinkCall("UpdateFile", relativePath, size, false)); }
             return UpdateFileResult;
         }
 
         public ProjFsUpdateOutcome TryDeleteFile(string relativePath, bool allowDirty)
         {
-            deleteCount++;
-            Calls.Add(new SinkCall("DeleteFile", relativePath, 0, allowDirty));
-            return OverrideOnNthDelete.TryGetValue(deleteCount, out var ov) ? ov : DeleteFileResult;
+            int n;
+            lock (gate)
+            {
+                deleteCount++;
+                n = deleteCount;
+                Calls.Add(new SinkCall("DeleteFile", relativePath, 0, allowDirty));
+            }
+            return OverrideOnNthDelete.TryGetValue(n, out var ov) ? ov : DeleteFileResult;
         }
     }
 
@@ -332,5 +288,11 @@ public sealed class ObjectStoreChangeWatcherTests
             Quarantined.Add(relativePath);
             return Result;
         }
+    }
+
+    private sealed class Disposable : IDisposable
+    {
+        public static readonly IDisposable Empty = new Disposable();
+        public void Dispose() { }
     }
 }

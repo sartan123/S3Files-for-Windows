@@ -24,6 +24,7 @@
     <PackageReference Include="Testcontainers" />
     <PackageReference Include="Testcontainers.LocalStack" />
     <PackageReference Include="AWSSDK.S3" />
+    <PackageReference Include="AWSSDK.SQS" />
   </ItemGroup>
 
   <ItemGroup>

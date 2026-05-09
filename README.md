@@ -135,7 +135,9 @@ Open `C:\Users\you\OSVFS` in Explorer and the bucket contents appear.
 | `--region` | AWS region (e.g. `us-east-1`, `ap-northeast-1`). When omitted, the SDK falls back to the standard region resolution chain (env vars, profile, IMDS). | — |
 | `--aws-profile` | Use credentials previously saved by `osvfs credentials set --profile <name>` (encrypted with DPAPI in Windows Credential Manager). When omitted, the AWS SDK's default chain is used. | — |
 | `--prefix` | Optional key prefix within the bucket. When set, only objects under this prefix are projected into the virtualization root. | — |
-| `--sync-interval-seconds` | Polling interval for detecting external object-store changes; `0` disables | `30` |
+| `--sync-interval-seconds` | Polling interval for detecting external object-store changes; `0` disables. Used by `polling` mode. | `30` |
+| `--change-source` | Strategy for detecting external object-store changes: `polling` (re-list bucket on `--sync-interval-seconds`) or `events` (long-poll an SQS queue carrying EventBridge S3 notifications). See [Change detection modes](#change-detection-modes). | `polling` |
+| `--event-queue` | SQS queue URL or queue name carrying EventBridge S3 notifications for the bucket. **Required** when `--change-source` is `events`. | — |
 | `--bandwidth-up` | Upload bandwidth ceiling. Plain bytes/s by default; suffixes `K`/`M`/`G` mean KiB/s, MiB/s, GiB/s (e.g. `5M` = 5 MiB/s). Omit or set to `0` to disable. | — (unlimited) |
 | `--bandwidth-down` | Download bandwidth ceiling. Same format as `--bandwidth-up`. | — (unlimited) |
 | `--multipart-threshold` | Stream size at or above which uploads are routed through the multipart path. Same K/M/G suffixes as `--bandwidth-up`. | `8M` |
@@ -199,6 +201,110 @@ upload at completion time:
   largest object you can upload is `part-size × 10 000` (16 MiB parts
   → 160 GiB max; 64 MiB parts → 640 GiB max). Pick a part size large
   enough to fit your largest expected file.
+
+### Change detection modes
+
+OSVFS supports two strategies for detecting changes that other clients (the
+AWS console, another `aws s3 cp`, a teammate's machine) make to the bucket.
+Pick the one that matches your bucket size, latency budget, and how much
+server-side configuration you can do.
+
+| Mode | Latency | Bucket-side setup | When to use |
+| --- | --- | --- | --- |
+| `polling` (default) | Up to `--sync-interval-seconds` (default 30 s) | None — works on any bucket the AWS credentials can list. | Small or quiet buckets; environments where you don't have permission to add EventBridge / SQS. |
+| `events` | Seconds (long-poll wakeup + SQS round-trip) | Bucket → EventBridge → SQS pipeline (steps below). | Large buckets where re-listing is expensive, or when you need near-real-time visibility on remote edits. |
+
+`events` needs an SQS queue that receives `Object Created` and `Object Deleted`
+notifications produced by EventBridge. The legacy direct S3-to-SQS
+notification format (`Records[]`) is **not** parsed; configure EventBridge
+instead.
+
+#### Setting up the SQS queue, EventBridge rule, and bucket notifications
+
+The four steps below create the minimal pipeline needed. Substitute your
+account ID, region, and bucket name. Each step shows the AWS CLI command;
+the same actions are available in the console under SQS / EventBridge / S3.
+
+1. **Create the SQS queue.**
+
+   ```bash
+   aws sqs create-queue --queue-name osvfs-changes \
+     --attributes ReceiveMessageWaitTimeSeconds=20
+   ```
+
+   Long-polling on the queue side reduces empty receives.
+
+2. **Allow EventBridge to publish to the queue.** Save this policy (replacing
+   the placeholders) as `queue-policy.json`:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Effect": "Allow",
+       "Principal": { "Service": "events.amazonaws.com" },
+       "Action": "sqs:SendMessage",
+       "Resource": "arn:aws:sqs:REGION:ACCOUNT_ID:osvfs-changes"
+     }]
+   }
+   ```
+
+   Then attach it to the queue:
+
+   ```bash
+   aws sqs set-queue-attributes \
+     --queue-url QUEUE_URL \
+     --attributes Policy=file://queue-policy.json
+   ```
+
+3. **Enable EventBridge notifications on the bucket** (S3 → bucket → Properties
+   → "Amazon EventBridge", or:)
+
+   ```bash
+   aws s3api put-bucket-notification-configuration \
+     --bucket YOUR_BUCKET \
+     --notification-configuration '{"EventBridgeConfiguration":{}}'
+   ```
+
+4. **Create the EventBridge rule that targets the queue.** Save the pattern as
+   `event-pattern.json`:
+
+   ```json
+   {
+     "source": ["aws.s3"],
+     "detail-type": ["Object Created", "Object Deleted"],
+     "detail": { "bucket": { "name": ["YOUR_BUCKET"] } }
+   }
+   ```
+
+   Then create the rule and target:
+
+   ```bash
+   aws events put-rule \
+     --name osvfs-bucket-changes \
+     --event-pattern file://event-pattern.json
+
+   aws events put-targets \
+     --rule osvfs-bucket-changes \
+     --targets 'Id=osvfs-sqs,Arn=arn:aws:sqs:REGION:ACCOUNT_ID:osvfs-changes'
+   ```
+
+The IAM identity that OSVFS runs as needs `sqs:ReceiveMessage`,
+`sqs:DeleteMessage`, and (when `--event-queue` is a bare name)
+`sqs:GetQueueUrl` on the queue.
+
+Then start `osvfs` with the new flags:
+
+```powershell
+osvfs `
+  --bucket my-bucket `
+  --root-folder C:\Users\you\OSVFS `
+  --change-source events `
+  --event-queue https://sqs.ap-northeast-1.amazonaws.com/123456789012/osvfs-changes
+```
+
+> One queue per virtualization root. Two `osvfs` instances sharing a queue
+> would each see only half of the messages.
 
 ### Sync interval for large buckets
 
@@ -295,6 +401,8 @@ log-format           = "text"                    # optional, "text" or "json"
 allow-unversioned    = false                     # DANGER: skip the bucket-versioning safety check
 verbose              = false
 sync-interval-seconds = 30
+change-source        = "polling"                 # "polling" | "events"
+event-queue          = ""                        # SQS URL/name, required for events
 ```
 
 A ready-to-edit sample is shipped as
@@ -385,8 +493,9 @@ object store and propagates local changes back.
  └─────────────────────┘                        └──────┬───────┘
                                                        │
  ┌─────────────────────┐  ListObjectsV2 (poll)         │
- │ S3ChangeWatcher     │ ←─────────────────────────────┘
- │  + LostAndFound     │
+ │ ObjectStoreChange   │ ←─────────────────────────────┘
+ │ Watcher             │       SQS ReceiveMessage
+ │  + LostAndFound     │ ←─────────  EventBridge ←──── (optional)
  └─────────────────────┘
 ```
 
@@ -410,11 +519,15 @@ Roughly:
   transparently rewrites virtualization-root-relative paths into the
   full bucket key (`<prefix>/<path>`) on every API call.
 - [`ObjectStoreChangeWatcher`](src/OSVFS.Core/Sync/ObjectStoreChangeWatcher.cs)
-  periodically re-lists the bucket, diffs against an in-memory snapshot, and
-  pushes external changes back into ProjFS. The object store is treated as
-  the source of truth: if a remote change collides with an unsynced local
-  edit, the local copy is moved to a `.osvfs-lost+found` quarantine
-  directory.
+  applies external bucket changes back into ProjFS. Changes are discovered
+  through pluggable [`IChangeSource`](src/OSVFS.Core/Sync/IChangeSource.cs)
+  implementations: [`PollingChangeSource`](src/OSVFS.Core/Sync/PollingChangeSource.cs)
+  re-lists the bucket on a fixed cadence and diffs against an in-memory
+  snapshot, while [`SqsChangeSource`](src/OSVFS.Core/Sync/Sqs/SqsChangeSource.cs)
+  long-polls an SQS queue carrying EventBridge S3 notifications. The object
+  store is treated as the source of truth: if a remote change collides with
+  an unsynced local edit, the local copy is moved to a `.osvfs-lost+found`
+  quarantine directory.
 
 ## Building
 

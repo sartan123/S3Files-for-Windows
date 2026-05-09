@@ -170,6 +170,34 @@ public class OsvfsConfigFileLoaderTests
     }
 
     [Fact]
+    public void Parse_change_source_kebab_and_snake_aliases_accepted()
+    {
+        var kebab = OsvfsConfigFileLoader.ParseContent("change-source = \"events\"", "test.toml");
+        var snake = OsvfsConfigFileLoader.ParseContent("change_source = \"polling\"", "test.toml");
+
+        Assert.Equal(ChangeSourceKind.Events, kebab.ChangeSource);
+        Assert.Equal(ChangeSourceKind.Polling, snake.ChangeSource);
+    }
+
+    [Fact]
+    public void Parse_unknown_change_source_throws()
+    {
+        var ex = Assert.Throws<OsvfsConfigException>(() =>
+            OsvfsConfigFileLoader.ParseContent("change-source = \"webhook\"", "test.toml"));
+        Assert.Contains("webhook", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_event_queue_kebab_and_snake_aliases_accepted()
+    {
+        var kebab = OsvfsConfigFileLoader.ParseContent("event-queue = \"q1\"", "test.toml");
+        var snake = OsvfsConfigFileLoader.ParseContent("event_queue = \"q2\"", "test.toml");
+
+        Assert.Equal("q1", kebab.EventQueue);
+        Assert.Equal("q2", snake.EventQueue);
+    }
+
+    [Fact]
     public void Parse_allow_unversioned_kebab_and_snake_aliases_accepted()
     {
         var kebab = OsvfsConfigFileLoader.ParseContent("allow-unversioned = true", "test.toml");

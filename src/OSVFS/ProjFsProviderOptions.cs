@@ -1,3 +1,4 @@
+using OSVFS.Configuration;
 using OSVFS.Net;
 using OSVFS.ObjectStore;
 
@@ -53,6 +54,18 @@ internal sealed class ProjFsProviderOptions
     /// Polling interval (seconds) for the change watcher; zero disables it.
     /// </summary>
     public int SyncIntervalSeconds { get; init; } = 30;
+
+    /// <summary>
+    /// Which change-detection strategy the watcher uses. Default polling preserves
+    /// the historical behavior; <c>Events</c> requires <see cref="EventQueue"/>.
+    /// </summary>
+    public ChangeSourceKind ChangeSource { get; init; } = ChangeSourceKind.Polling;
+
+    /// <summary>
+    /// SQS queue URL or queue name carrying EventBridge S3 notifications. Required
+    /// when <see cref="ChangeSource"/> is <see cref="ChangeSourceKind.Events"/>.
+    /// </summary>
+    public string? EventQueue { get; init; }
 
     /// <summary>
     /// Optional static credentials resolved from the OSVFS credential store; null falls

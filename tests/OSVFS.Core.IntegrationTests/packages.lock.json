@@ -11,6 +11,15 @@
           "AWSSDK.Core": "[4.0.6.1, 5.0.0)"
         }
       },
+      "AWSSDK.SQS": {
+        "type": "Direct",
+        "requested": "[4.0.2.28, )",
+        "resolved": "4.0.2.28",
+        "contentHash": "MHyrr8ac6eKcrOefyBkbj+/PbWvfXOVp/10PzpF+nVyb6HwBnFKgFlmgooaR8jEivZmQDeYMtM0Uh3y9YZOseg==",
+        "dependencies": {
+          "AWSSDK.Core": "[4.0.6.1, 5.0.0)"
+        }
+      },
       "Microsoft.NET.Test.Sdk": {
         "type": "Direct",
         "requested": "[18.5.1, )",
@@ -202,6 +211,7 @@
         "type": "Project",
         "dependencies": {
           "AWSSDK.S3": "[4.0.22.2, )",
+          "AWSSDK.SQS": "[4.0.2.28, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.7, )"
         }
       },
