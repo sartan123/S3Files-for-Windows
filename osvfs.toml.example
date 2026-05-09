@@ -11,6 +11,15 @@
 # matches the CLI flag names and is preferred.
 #
 # All keys are optional. Uncomment and edit the ones you need.
+#
+# Two layouts are supported:
+#   * Legacy / single-mount: keep the bucket / root-folder / per-mount keys at
+#     the document root, exactly as below. The host treats this as one mount
+#     named "default".
+#   * Multi-mount: declare each mount inside a [[mount]] table-array (see the
+#     bottom of this file for an example). The top-level keys then must be the
+#     process-wide ones (verbose, log-format) only; mount-related keys at the
+#     root would be ambiguous and are rejected at parse time.
 
 # Object-store provider backing the virtualization root.
 # Currently only "s3" is fully implemented; "gcs" / "azureblob" fail at startup.
@@ -104,3 +113,30 @@
 
 # Raise log verbosity to Debug.
 # verbose = false
+
+# -----------------------------------------------------------------------------
+# Multi-mount example (commented out)
+#
+# Uncomment the [[mount]] tables below AND remove every per-mount key from the
+# document root (bucket, root-folder, region, prefix, ...). Process-level keys
+# (verbose, log-format) stay at the top level and apply to every mount.
+#
+# Run:
+#   osvfs mount-all              # start every [[mount]] in this process
+#   osvfs mount --name personal  # start a single mount by name
+#
+# 'name' must be unique within the file. Each entry takes the same per-mount
+# keys as the legacy single-mount form above.
+# -----------------------------------------------------------------------------
+
+# [[mount]]
+# name        = "personal"
+# bucket      = "my-personal"
+# root-folder = "C:/Users/you/OSVFS-personal"
+
+# [[mount]]
+# name        = "work"
+# bucket      = "my-work"
+# root-folder = "C:/Users/you/OSVFS-work"
+# prefix      = "team-a/"
+# aws-profile = "prod-readonly"

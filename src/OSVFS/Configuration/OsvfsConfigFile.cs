@@ -1,146 +1,44 @@
-using OSVFS.ObjectStore;
-
 namespace OSVFS.Configuration;
 
 /// <summary>
-/// Strongly-typed view of an <c>osvfs.toml</c> file. Every property is nullable
-/// because settings absent from the file fall back to the next source in the
-/// CLI &gt; project file &gt; user file &gt; built-in default chain.
+/// Strongly-typed view of an <c>osvfs.toml</c> file. Splits the file into
+/// process-level settings (<see cref="Verbose"/>, <see cref="LogFormat"/> —
+/// applied to the whole CLI invocation) and a list of per-mount entries in
+/// <see cref="Mounts"/>. The legacy single-mount form (root-level
+/// <c>bucket</c> / <c>root-folder</c> / etc.) is normalized into a single
+/// <c>"default"</c> entry by the loader so callers always see a uniform shape.
 /// </summary>
 internal sealed class OsvfsConfigFile
 {
     /// <summary>
-    /// Object-store provider backing the virtualization root.
-    /// </summary>
-    public ObjectStoreProvider? Provider { get; init; }
-
-    /// <summary>
-    /// Bucket (S3/GCS) or container (Azure) projected into the virtualization root.
-    /// </summary>
-    public string? Bucket { get; init; }
-
-    /// <summary>
-    /// Local directory marked as the ProjFS virtualization root.
-    /// </summary>
-    public string? RootFolder { get; init; }
-
-    /// <summary>
-    /// Endpoint override for S3-compatible servers (LocalStack, MinIO).
-    /// </summary>
-    public string? EndpointUrl { get; init; }
-
-    /// <summary>
-    /// AWS region; null falls back to the SDK's default resolution chain.
-    /// </summary>
-    public string? Region { get; init; }
-
-    /// <summary>
-    /// Optional key prefix; only objects beneath it are projected into the root.
-    /// </summary>
-    public string? Prefix { get; init; }
-
-    /// <summary>
-    /// When true, raises log verbosity to Debug.
+    /// When true, raises log verbosity to Debug. Process-wide setting that
+    /// applies to every mount started from this configuration.
     /// </summary>
     public bool? Verbose { get; init; }
 
     /// <summary>
-    /// When true, ignore notification-driven local mutations and disable the change watcher.
-    /// </summary>
-    public bool? ReadOnly { get; init; }
-
-    /// <summary>
-    /// Polling interval (seconds) for the change watcher; zero disables it.
-    /// </summary>
-    public int? SyncIntervalSeconds { get; init; }
-
-    /// <summary>
-    /// Which change-detection strategy the watcher uses (polling or events).
-    /// </summary>
-    public ChangeSourceKind? ChangeSource { get; init; }
-
-    /// <summary>
-    /// Polling reconciliation strategy — on-demand (per visited directory) or
-    /// full (whole bucket). Default <see cref="SyncMode.OnDemand"/>; only
-    /// consulted when <see cref="ChangeSource"/> is <see cref="ChangeSourceKind.Polling"/>.
-    /// </summary>
-    public SyncMode? SyncMode { get; init; }
-
-    /// <summary>
-    /// SQS queue URL or queue name carrying EventBridge S3 notifications.
-    /// </summary>
-    public string? EventQueue { get; init; }
-
-    /// <summary>
-    /// Profile name in the OSVFS credential store; null means use the SDK's default chain.
-    /// </summary>
-    public string? AwsProfile { get; init; }
-
-    /// <summary>
-    /// rclone-style upload bandwidth ceiling (e.g. <c>"5M"</c>). Null disables.
-    /// </summary>
-    public string? BandwidthUp { get; init; }
-
-    /// <summary>
-    /// rclone-style download bandwidth ceiling (e.g. <c>"10M"</c>). Null disables.
-    /// </summary>
-    public string? BandwidthDown { get; init; }
-
-    /// <summary>
-    /// Stream size at or above which uploads are routed through the multipart
-    /// path (e.g. <c>"16M"</c>). Null falls back to the backend default.
-    /// </summary>
-    public string? MultipartThreshold { get; init; }
-
-    /// <summary>
-    /// Per-part size used by multipart uploads (e.g. <c>"16M"</c>). Null falls
-    /// back to the backend default.
-    /// </summary>
-    public string? MultipartPartSize { get; init; }
-
-    /// <summary>
     /// Console log output format. Null falls back to <see cref="LogFormat.Text"/>.
+    /// Process-wide.
     /// </summary>
     public LogFormat? LogFormat { get; init; }
 
     /// <summary>
-    /// Total attempts (initial + retries) the AWS SDK makes on transient
-    /// failures. Null falls back to the backend default.
+    /// Mount entries declared in the file. Order is preserved from the source
+    /// document so <c>mount-all</c> starts mounts in declaration order.
     /// </summary>
-    public int? RetryMaxAttempts { get; init; }
-
-    /// <summary>
-    /// When true, skip the bucket-versioning safety check and instead emit a
-    /// repeated warning. Intended for CI / disposable buckets only.
-    /// </summary>
-    public bool? AllowUnversioned { get; init; }
+    public IReadOnlyList<OsvfsMountConfig> Mounts { get; init; } = [];
 
     /// <summary>
     /// Returns a copy of this config with values from <paramref name="overlay"/> taking
-    /// precedence wherever they are non-null. Used to fold the project-local
-    /// <c>osvfs.toml</c> on top of the user-global <c>%APPDATA%/OSVFS/config.toml</c>.
+    /// precedence wherever they are non-null. Process-level fields merge per
+    /// key; the <see cref="Mounts"/> list from <paramref name="overlay"/> wins
+    /// outright when non-empty (project-local config typically defines the
+    /// authoritative mount set), otherwise the user-global list is preserved.
     /// </summary>
     public OsvfsConfigFile MergeOverlay(OsvfsConfigFile overlay) => new()
     {
-        Provider = overlay.Provider ?? Provider,
-        Bucket = overlay.Bucket ?? Bucket,
-        RootFolder = overlay.RootFolder ?? RootFolder,
-        EndpointUrl = overlay.EndpointUrl ?? EndpointUrl,
-        Region = overlay.Region ?? Region,
-        Prefix = overlay.Prefix ?? Prefix,
         Verbose = overlay.Verbose ?? Verbose,
-        ReadOnly = overlay.ReadOnly ?? ReadOnly,
-        SyncIntervalSeconds = overlay.SyncIntervalSeconds ?? SyncIntervalSeconds,
-        ChangeSource = overlay.ChangeSource ?? ChangeSource,
-        SyncMode = overlay.SyncMode ?? SyncMode,
-        EventQueue = overlay.EventQueue ?? EventQueue,
-        AwsProfile = overlay.AwsProfile ?? AwsProfile,
-        BandwidthUp = overlay.BandwidthUp ?? BandwidthUp,
-        BandwidthDown = overlay.BandwidthDown ?? BandwidthDown,
-        MultipartThreshold = overlay.MultipartThreshold ?? MultipartThreshold,
-        MultipartPartSize = overlay.MultipartPartSize ?? MultipartPartSize,
         LogFormat = overlay.LogFormat ?? LogFormat,
-        RetryMaxAttempts = overlay.RetryMaxAttempts ?? RetryMaxAttempts,
-        AllowUnversioned = overlay.AllowUnversioned ?? AllowUnversioned,
+        Mounts = overlay.Mounts.Count > 0 ? overlay.Mounts : Mounts,
     };
 }

@@ -6,9 +6,11 @@ namespace OSVFS;
 
 /// <summary>
 /// Parsed command-line options that drive a <see cref="ProjFs.ProjFsProvider"/>
-/// instance.
+/// instance. Modeled as a record so individual fields can be replaced with
+/// the <c>with</c> expression when the host needs to overlay process-level
+/// settings on top of a mount-derived options object.
 /// </summary>
-internal sealed class ProjFsProviderOptions
+internal sealed record ProjFsProviderOptions
 {
     /// <summary>
     /// Object-store provider backing the virtualization root.

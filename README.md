@@ -14,7 +14,7 @@ feature in Windows 10 1809+ and Windows 11, so OSVFS does not need WinFsp
 
 The current build ships an Amazon S3 backend. The object-store abstraction
 is provider-neutral by design, and **additional providers (Google Cloud
-Storage and Azure Blob Storage) are planned** behind the same `--provider`
+Storage and Azure Blob Storage) are planned** behind the same `provider`
 flag — see [Supported backends](#supported-backends) below.
 
 [projfs]: https://learn.microsoft.com/en-us/windows/win32/projfs/projected-file-system
@@ -44,7 +44,7 @@ zero-third-party-driver install path.
 | Install footprint | Single signed `osvfs.exe` (Native AOT) | `rclone.exe` + WinFsp MSI |
 | AppLocker / WDAC fit | No third-party kernel driver to allow-list | Requires WinFsp kernel driver to be allowed by policy |
 | Explorer integration | Native ProjFS placeholders — the same "online-only" model OneDrive uses | FUSE-style mount; files appear as fully-present |
-| Backends today | S3 (GCS / Azure Blob planned behind the same `--provider` flag) | 70+ backends |
+| Backends today | S3 (GCS / Azure Blob planned behind the same `provider` flag) | 70+ backends |
 | Runtime dependency | None (Native AOT) | None (single Go binary) |
 
 If you need a backend OSVFS does not support, keep using rclone. If you
@@ -55,11 +55,11 @@ kernel driver, OSVFS is for you.
 
 OSVFS is built around a provider-neutral
 [`IObjectStoreBackend`](src/OSVFS.Core/ObjectStore/IObjectStoreBackend.cs)
-abstraction, and the backend is selected at startup with the `--provider`
+abstraction, and the backend is selected at startup with the `provider`
 flag. Multi-cloud support is an explicit goal of the project, not just an
 abstraction left open for later.
 
-| Provider | `--provider` value | Status |
+| Provider | `provider` value | Status |
 | --- | --- | --- |
 | Amazon S3 (and S3-compatible: MinIO, Cloudflare R2, Wasabi, Backblaze B2, Ceph, …) | `s3` | **Available** |
 | Google Cloud Storage | `gcs` | Planned |
@@ -78,7 +78,7 @@ abstraction left open for later.
 - An S3 bucket you have read/write access to
 - **Bucket versioning must be Enabled** on the target bucket. `osvfs`
   refuses to start otherwise — see [Why versioning matters](#why-versioning-matters)
-  for the rationale and the `--allow-unversioned` escape hatch. The
+  for the rationale and the `allow-unversioned` escape hatch. The
   credentials must also allow `s3:GetBucketVersioning`.
 
 Enable versioning once with the AWS CLI:
@@ -104,8 +104,8 @@ put-bucket-versioning` command, the bucket name, and a link back to this
 section.
 
 For CI runs or disposable buckets where the bucket is recreated per-job
-and the recoverability story does not apply, pass `--allow-unversioned` to
-bypass the safety check.
+and the recoverability story does not apply, set `allow-unversioned = true`
+in `osvfs.toml` to bypass the safety check.
 
 Enable ProjFS once, in an elevated PowerShell session:
 
@@ -115,63 +115,63 @@ Enable-WindowsOptionalFeature -Online -FeatureName Client-ProjFS -All
 
 ### Run
 
-```powershell
-osvfs `
-  --provider s3 `
-  --bucket my-bucket `
-  --root-folder C:\Users\you\OSVFS
+OSVFS reads every per-mount setting from a TOML configuration file (see
+[Configuration file](#configuration-file) for the full key reference and the
+multi-mount layout). The shortest possible config is:
+
+```toml
+# ./osvfs.toml
+bucket      = "my-bucket"
+root-folder = "C:/Users/you/OSVFS"
 ```
 
-Open `C:\Users\you\OSVFS` in Explorer and the bucket contents appear.
+With that file in the current directory (or at
+`%APPDATA%\OSVFS\config.toml`):
 
-### Command-line options
+```powershell
+osvfs                            # start the configured mount
+osvfs mount-all                  # start every [[mount]] in the config (multi-mount form)
+osvfs mount --name personal      # start one mount by name
+```
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `--provider` | Object-store provider backing the virtualization root. Currently `s3` is fully implemented; `gcs` / `azureblob` fail at startup. | `s3` |
-| `--bucket` | Bucket (S3/GCS) or container (Azure) to expose through the filesystem (required) | — |
-| `--root-folder` | Path to the virtualization root (required) | — |
-| `--endpoint-url` | Override the default S3 endpoint URL (e.g. for LocalStack / MinIO) | AWS default |
-| `--region` | AWS region (e.g. `us-east-1`, `ap-northeast-1`). When omitted, the SDK falls back to the standard region resolution chain (env vars, profile, IMDS). | — |
-| `--aws-profile` | Use credentials previously saved by `osvfs credentials set --profile <name>` (encrypted with DPAPI in Windows Credential Manager). When omitted, the AWS SDK's default chain is used. | — |
-| `--prefix` | Optional key prefix within the bucket. When set, only objects under this prefix are projected into the virtualization root. | — |
-| `--sync-interval-seconds` | Polling interval for detecting external object-store changes; `0` disables. Used by `polling` mode. | `30` |
-| `--change-source` | Strategy for detecting external object-store changes: `polling` (re-list bucket on `--sync-interval-seconds`) or `events` (long-poll an SQS queue carrying EventBridge S3 notifications). See [Change detection modes](#change-detection-modes). | `polling` |
-| `--sync-mode` | Polling reconciliation strategy: `on-demand` (re-list only directories the user has visited via ProjFS — scales with visited dirs, not bucket size) or `full` (re-list the whole bucket every tick — preserves the original Phase&nbsp;1 behavior). See [On-demand sync](#on-demand-sync). Only consulted when `--change-source` is `polling`. | `on-demand` |
-| `--event-queue` | SQS queue URL or queue name carrying EventBridge S3 notifications for the bucket. **Required** when `--change-source` is `events`. | — |
-| `--bandwidth-up` | Upload bandwidth ceiling. Plain bytes/s by default; suffixes `K`/`M`/`G` mean KiB/s, MiB/s, GiB/s (e.g. `5M` = 5 MiB/s). Omit or set to `0` to disable. | — (unlimited) |
-| `--bandwidth-down` | Download bandwidth ceiling. Same format as `--bandwidth-up`. | — (unlimited) |
-| `--multipart-threshold` | Stream size at or above which uploads are routed through the multipart path. Same K/M/G suffixes as `--bandwidth-up`. | `8M` |
-| `--multipart-part-size` | Per-part size used by multipart uploads. Must be between `5M` and `5G`. | `5M` |
-| `--retry-max-attempts` | Total attempts (initial + retries) the AWS SDK makes on transient failures. `1` disables retries; `4xx` errors fail immediately regardless. See [Retry policy](#retry-policy). | `3` |
-| `--log-format` | Console log output format: `text` (single-line, human-readable) or `json` (one UTF-8 JSON object per line, UTC timestamps, for log shippers like Datadog / Loki). | `text` |
-| `--allow-unversioned` | **DANGER:** Skip the bucket-versioning safety check and run against a bucket without versioning. Local edits and deletes become unrecoverable. Intended for CI / disposable buckets only — see [Why versioning matters](#why-versioning-matters). | off |
-| `--verbose` | Enable debug-level logging | off |
+Open the configured root folder in Explorer and the bucket contents appear.
 
-To project only a sub-tree of a bucket — for example `s3://my-bucket/team-a/` —
-pass `--prefix team-a/`. The virtualization root then mirrors that prefix as
-its own logical root: listings, hydration, writes, deletes, and renames all
-stay scoped to objects under the prefix, and the rest of the bucket is
-invisible.
+### Command-line surface
+
+OSVFS is intentionally configuration-driven: every per-mount setting
+(`bucket`, `root-folder`, `region`, `aws-profile`, `bandwidth-up`,
+`retry-max-attempts`, …) lives only in `osvfs.toml`. The command line
+exposes just three things:
+
+| Surface | Purpose |
+| --- | --- |
+| Sub-commands (`mount`, `mount-all`, `credentials`) | Pick which mount(s) to start, or manage the encrypted credential store. |
+| `--name <mount>` | Selects an entry from the `[[mount]]` array on `osvfs mount`. |
+| `--verbose`, `--log-format` | Process-level overrides for one-off debugging. The TOML keys (`verbose`, `log-format`) are still honoured; the CLI flags simply win when both are present. |
+
+To project only a sub-tree of a bucket — for example
+`s3://my-bucket/team-a/` — set `prefix = "team-a/"` in the mount entry.
+The virtualization root then mirrors that prefix as its own logical root:
+listings, hydration, writes, deletes, and renames all stay scoped to objects
+under the prefix, and the rest of the bucket is invisible.
 
 ### Bandwidth limits
 
 `osvfs` runs as a long-lived background process, so a single large hydration
-or upload can saturate the link and starve other applications. Pass
-`--bandwidth-up` / `--bandwidth-down` (or set them in
-[`osvfs.toml`](#configuration-file)) to cap each direction independently:
+or upload can saturate the link and starve other applications. Set
+`bandwidth-up` / `bandwidth-down` in
+[`osvfs.toml`](#configuration-file) to cap each direction independently:
 
-```powershell
-osvfs `
-  --bucket my-bucket `
-  --root-folder C:\Users\you\OSVFS `
-  --bandwidth-up 5M `       # cap uploads at 5 MiB/s
-  --bandwidth-down 10M      # cap downloads at 10 MiB/s
+```toml
+bucket         = "my-bucket"
+root-folder    = "C:/Users/you/OSVFS"
+bandwidth-up   = "5M"       # cap uploads at 5 MiB/s
+bandwidth-down = "10M"      # cap downloads at 10 MiB/s
 ```
 
 Values follow the rclone `--bwlimit` convention: a plain number is bytes per
 second, and the `K` / `M` / `G` suffixes mean KiB/s, MiB/s, and GiB/s
-respectively (`5M` = 5 MiB/s). Omitting the flag — or setting it to `0` —
+respectively (`5M` = 5 MiB/s). Omitting the key — or setting it to `0` —
 leaves that direction unlimited. The limit is enforced through a token
 bucket on the upload payload stream and the download response stream, so
 `TransferUtility`'s multipart workers and the on-demand hydration path are
@@ -179,25 +179,25 @@ both paced by the same ceiling.
 
 ### Tuning multipart uploads
 
-`osvfs` routes any upload at or above `--multipart-threshold` through the
-S3 multipart path, splitting the payload into `--multipart-part-size`
+`osvfs` routes any upload at or above `multipart-threshold` through the
+S3 multipart path, splitting the payload into `multipart-part-size`
 chunks that `TransferUtility` uploads in parallel. The defaults (8 MiB
 threshold, 5 MiB parts) target a typical office connection, but two
 common scenarios benefit from explicit tuning:
 
 | Scenario | Suggested settings | Why |
 | --- | --- | --- |
-| Fat links / large files | `--multipart-threshold 64M --multipart-part-size 64M` | Larger parts amortize per-request overhead and cut the part count on multi-GiB files. |
-| Many tiny edits | `--multipart-threshold 16M` (keep 5M parts) | Skips multipart for small files where a single PUT is faster than negotiating an upload session. |
+| Fat links / large files | `multipart-threshold = "64M"`, `multipart-part-size = "64M"` | Larger parts amortize per-request overhead and cut the part count on multi-GiB files. |
+| Many tiny edits | `multipart-threshold = "16M"` (keep 5M parts) | Skips multipart for small files where a single PUT is faster than negotiating an upload session. |
 | Constrained networks | Keep defaults | Smaller parts mean a network blip retries less data. |
 
 S3 enforces three hard limits on the part size — you must stay inside
 all of them or `osvfs` refuses to start, and the service rejects the
 upload at completion time:
 
-- `--multipart-part-size` must be **≥ 5 MiB** (`5M`). Smaller parts are
+- `multipart-part-size` must be **≥ 5 MiB** (`5M`). Smaller parts are
   rejected by S3 except for the last part of an upload.
-- `--multipart-part-size` must be **≤ 5 GiB** (`5G`). Larger parts
+- `multipart-part-size` must be **≤ 5 GiB** (`5G`). Larger parts
   exceed the per-part ceiling.
 - A single multipart upload is capped at **10 000 parts**, so the
   largest object you can upload is `part-size × 10 000` (16 MiB parts
@@ -210,7 +210,7 @@ Transient object-store failures are retried by the AWS SDK pipeline. OSVFS
 configures the client with `RetryMode.Adaptive` (the SDK's adaptive
 client-side throttling, which combines the standard exponential backoff with
 a token bucket that suppresses request bursts when the service signals
-overload) and `MaxErrorRetry = --retry-max-attempts − 1`. The SDK's built-in
+overload) and `MaxErrorRetry = retry-max-attempts − 1`. The SDK's built-in
 retry classifier decides which failures are eligible:
 
 | Failure | Retried? | Notes |
@@ -223,17 +223,16 @@ retry classifier decides which failures are eligible:
 | `OperationCanceledException` / `TaskCanceledException` | No | Cancellation propagates without retry. |
 
 The schedule is owned by the SDK: it uses exponential backoff with jitter
-inside `MaxErrorRetry` retries. When `--retry-max-attempts` is `1` the SDK
+inside `MaxErrorRetry` retries. When `retry-max-attempts` is `1` the SDK
 performs zero retries (the first attempt is the only one). The SDK's
 `TransferUtility` retries individual multipart parts on its own — under
-`--retry-max-attempts 3` a single failing part can be re-uploaded up to
+`retry-max-attempts = 3` a single failing part can be re-uploaded up to
 three times without restarting the whole multi-GiB upload.
 
-```powershell
-osvfs `
-  --bucket my-bucket `
-  --root-folder C:\Users\you\OSVFS `
-  --retry-max-attempts 5         # 5 total attempts (1 initial + 4 retries)
+```toml
+bucket             = "my-bucket"
+root-folder        = "C:/Users/you/OSVFS"
+retry-max-attempts = 5         # 5 total attempts (1 initial + 4 retries)
 ```
 
 ### Change detection modes
@@ -245,7 +244,7 @@ server-side configuration you can do.
 
 | Mode | Latency | Bucket-side setup | When to use |
 | --- | --- | --- | --- |
-| `polling` (default) | Up to `--sync-interval-seconds` (default 30 s) | None — works on any bucket the AWS credentials can list. | Small or quiet buckets; environments where you don't have permission to add EventBridge / SQS. |
+| `polling` (default) | Up to `sync-interval-seconds` (default 30 s) | None — works on any bucket the AWS credentials can list. | Small or quiet buckets; environments where you don't have permission to add EventBridge / SQS. |
 | `events` | Seconds (long-poll wakeup + SQS round-trip) | Bucket → EventBridge → SQS pipeline (steps below). | Large buckets where re-listing is expensive, or when you need near-real-time visibility on remote edits. |
 
 `events` needs an SQS queue that receives `Object Created` and `Object Deleted`
@@ -324,17 +323,16 @@ the same actions are available in the console under SQS / EventBridge / S3.
    ```
 
 The IAM identity that OSVFS runs as needs `sqs:ReceiveMessage`,
-`sqs:DeleteMessage`, and (when `--event-queue` is a bare name)
+`sqs:DeleteMessage`, and (when `event-queue` is a bare name)
 `sqs:GetQueueUrl` on the queue.
 
-Then start `osvfs` with the new flags:
+Then point the mount at the queue in your config:
 
-```powershell
-osvfs `
-  --bucket my-bucket `
-  --root-folder C:\Users\you\OSVFS `
-  --change-source events `
-  --event-queue https://sqs.ap-northeast-1.amazonaws.com/123456789012/osvfs-changes
+```toml
+bucket        = "my-bucket"
+root-folder   = "C:/Users/you/OSVFS"
+change-source = "events"
+event-queue   = "https://sqs.ap-northeast-1.amazonaws.com/123456789012/osvfs-changes"
 ```
 
 > One queue per virtualization root. Two `osvfs` instances sharing a queue
@@ -342,19 +340,19 @@ osvfs `
 
 ### On-demand sync
 
-`polling` mode supports two reconciliation strategies via `--sync-mode`:
+`polling` mode supports two reconciliation strategies via `sync-mode`:
 
 | Mode | What gets re-listed each tick | API cost | When to use |
 | --- | --- | --- | --- |
 | `on-demand` (default) | Only the directories the user has actually visited through ProjFS, plus their ancestor chain | Scales with the **visited-directory count**, independent of bucket size | The default — matches ProjFS's on-demand model and the AWS S3 Files [synchronization design](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files-synchronization.html). |
-| `full` | The entire bucket (or `--prefix` subtree) | Scales with **total object count** (one `ListObjectsV2` page per 1000 keys, every tick) | When you need the bucket-wide source-of-truth guarantee, or for small/quiet buckets where the cost is negligible. Preserves the original Phase&nbsp;1 behavior. |
+| `full` | The entire bucket (or `prefix` subtree) | Scales with **total object count** (one `ListObjectsV2` page per 1000 keys, every tick) | When you need the bucket-wide source-of-truth guarantee, or for small/quiet buckets where the cost is negligible. Preserves the original Phase&nbsp;1 behavior. |
 
 ### Sync interval for large buckets
 
 `osvfs` detects external object-store changes by re-listing the bucket every
-`--sync-interval-seconds` (default `30`). Under `--sync-mode=full` each poll
+`sync-interval-seconds` (default `30`). Under `sync-mode = "full"` each poll
 walks every page of `ListObjectsV2` for the configured prefix; under
-`--sync-mode=on-demand` each poll re-lists every visited directory once with
+`sync-mode = "on-demand"` each poll re-lists every visited directory once with
 `Delimiter='/'` (one paged request per directory).
 
 Under `full` mode the wall time of a poll grows roughly linearly with the
@@ -363,8 +361,8 @@ number of objects under the watched prefix because S3 caps a single
 `ListObjectsV2` page typically returns in tens to low-hundreds of
 milliseconds against AWS S3 from a nearby region, so a 100k-object bucket
 needs ~100 round-trips and a few seconds of listing per tick. If the listing
-time approaches `--sync-interval-seconds`, raise the interval (or scope the
-projection with `--prefix`) so polls do not overlap and starve other I/O.
+time approaches `sync-interval-seconds`, raise the interval (or scope the
+projection with `prefix`) so polls do not overlap and starve other I/O.
 
 Under `on-demand` mode the cost instead scales with the number of visited
 directories, so a bucket with 100 directories each containing 10k files
@@ -374,12 +372,13 @@ not one per 1000 keys in the bucket.
 ### Structured logging
 
 By default `osvfs` writes single-line, human-readable log entries to the
-console. Pass `--log-format json` (or set `log-format = "json"` in
-[`osvfs.toml`](#configuration-file)) to switch to a structured stream that
-log shippers such as Datadog or Loki can parse without regex:
+console. Set `log-format = "json"` in
+[`osvfs.toml`](#configuration-file) (or pass `--log-format json` for an
+ad-hoc override) to switch to a structured stream that log shippers such
+as Datadog or Loki can parse without regex:
 
 ```powershell
-osvfs --bucket my-bucket --root-folder C:\Users\you\OSVFS --log-format json
+osvfs --log-format json    # one-off override; the file value applies otherwise
 ```
 
 Each log entry is written as a single line (terminated with the platform
@@ -494,13 +493,58 @@ copied next to `osvfs.exe` on `dotnet publish`, so you can rename it to
 need.
 
 Both kebab-case (`root-folder`) and snake_case (`root_folder`) keys are
-accepted; kebab matches the CLI flag names and is preferred. With a config
-file in place, a typical mount becomes:
+accepted; kebab is preferred. With a config file in place, a typical mount
+is just:
 
 ```powershell
 osvfs                       # all options sourced from osvfs.toml
-osvfs --bucket other-bucket # config file used, --bucket overrides it
 ```
+
+#### Multiple mounts in a single config
+
+A configuration file can declare more than one mount under the `[[mount]]`
+table-array syntax, each with its own bucket / root-folder / region / etc.
+The process-level keys (`verbose`, `log-format`) stay at the top level and
+apply to every mount:
+
+```toml
+# ./osvfs.toml — multiple mounts
+verbose   = false
+log-format = "json"
+
+[[mount]]
+name        = "personal"
+bucket      = "my-personal"
+root-folder = "C:/Users/you/OSVFS-personal"
+
+[[mount]]
+name        = "work"
+bucket      = "my-work"
+root-folder = "C:/Users/you/OSVFS-work"
+prefix      = "team-a/"
+aws-profile = "prod-readonly"
+```
+
+Each `[[mount]]` entry takes the same per-mount keys as the legacy single-
+mount form (everything except `verbose` and `log-format`). The `name` is
+required to be unique within the file; entries without an explicit `name`
+are tagged `mount[0]`, `mount[1]`, etc. Mixing top-level mount keys with
+`[[mount]]` entries in the same file is rejected so the precedence stays
+unambiguous — pick one form per file.
+
+When a file declares 2+ mounts, the bare root command refuses to guess
+which one the operator wants. Pick one of:
+
+```powershell
+osvfs mount-all                 # start every [[mount]] in this process
+osvfs mount --name personal     # start a single named mount
+osvfs mount --name work         # start a different mount from the same config
+```
+
+Each mount runs its own `ProjFsProvider`; logs from a given mount land in
+the `OSVFS.Mount.<name>` category so text / JSON formatters surface which
+mount each line came from. Pressing Enter on the host process disposes
+every mount in reverse start order.
 
 ### Managing AWS credentials
 
@@ -532,14 +576,13 @@ osvfs credentials list
 osvfs credentials remove --profile prod
 ```
 
-Then run `osvfs` with `--aws-profile <name>` to use it for a mount:
+Then reference the profile in your mount config:
 
-```powershell
-osvfs `
-  --provider s3 `
-  --bucket my-bucket `
-  --root-folder C:\Users\you\OSVFS `
-  --aws-profile prod
+```toml
+provider    = "s3"
+bucket      = "my-bucket"
+root-folder = "C:/Users/you/OSVFS"
+aws-profile = "prod"
 ```
 
 Each entry is stored as a Windows generic credential under the target name
@@ -593,11 +636,11 @@ Roughly:
   behind the provider-neutral [`IObjectStoreBackend`](src/OSVFS.Core/ObjectStore/IObjectStoreBackend.cs)
   with the small, ProjFS-shaped surface the provider needs (list, head,
   range read, upload, delete, rename-by-copy). Uploads at or above the
-  configured `--multipart-threshold` (default 8 MiB) are routed through
-  `TransferUtility` so large files are split into `--multipart-part-size`
+  configured `multipart-threshold` (default 8 MiB) are routed through
+  `TransferUtility` so large files are split into `multipart-part-size`
   chunks (default 5 MiB) and uploaded in parallel. It lives in a cross-platform Core library so
   integration tests can run against LocalStack on Linux without pulling in
-  the Windows-only ProjFS bindings. When `--prefix` is set, the backend
+  the Windows-only ProjFS bindings. When `prefix` is set, the backend
   transparently rewrites virtualization-root-relative paths into the
   full bucket key (`<prefix>/<path>`) on every API call.
 - [`ObjectStoreChangeWatcher`](src/OSVFS.Core/Sync/ObjectStoreChangeWatcher.cs)
@@ -609,7 +652,7 @@ Roughly:
   ProjFS using `Delimiter='/'`,
   [`PollingChangeSource`](src/OSVFS.Core/Sync/PollingChangeSource.cs)
   re-lists the entire bucket on a fixed cadence and diffs against an
-  in-memory snapshot (selected by `--sync-mode=full`), and
+  in-memory snapshot (selected by `sync-mode = "full"`), and
   [`SqsChangeSource`](src/OSVFS.Core/Sync/Sqs/SqsChangeSource.cs)
   long-polls an SQS queue carrying EventBridge S3 notifications. The object
   store is treated as the source of truth: if a remote change collides with
@@ -632,7 +675,7 @@ Roughly:
 
 ```powershell
 dotnet build OSVFS.slnx -c Debug
-dotnet run --project src\OSVFS -- --bucket my-bucket --root-folder C:\Users\you\OSVFS
+dotnet run --project src\OSVFS    # mount config supplied via osvfs.toml
 ```
 
 ### Release build (Native AOT, single binary)

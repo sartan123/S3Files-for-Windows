@@ -28,6 +28,13 @@ internal static class OsvfsConfigFileLoader
     public const string UserFolderName = "OSVFS";
 
     /// <summary>
+    /// Default mount name applied to the legacy single-mount form when no
+    /// explicit <c>[[mount]]</c> array is present. Operators can address this
+    /// mount on the CLI as <c>osvfs mount --name default</c>.
+    /// </summary>
+    public const string LegacyDefaultMountName = "default";
+
+    /// <summary>
     /// Locates the standard config files and returns the merged result, or null
     /// when neither file exists. Project-local entries override user-global ones.
     /// </summary>
@@ -93,7 +100,10 @@ internal static class OsvfsConfigFileLoader
     }
 
     /// <summary>
-    /// Parses raw TOML text. Exposed for unit tests so they do not need real files.
+    /// Parses raw TOML text. Exposed for unit tests so they do not need real
+    /// files. Both the modern <c>[[mount]]</c> array form and the legacy
+    /// flat (single-mount) form are accepted; the legacy form synthesizes a
+    /// single mount entry named <c>"default"</c>.
     /// </summary>
     public static OsvfsConfigFile ParseContent(string content, string sourcePath)
     {
@@ -106,15 +116,85 @@ internal static class OsvfsConfigFileLoader
         }
 
         var table = doc.ToModel();
+
+        var mounts = ReadMountArray(table, sourcePath);
+        if (mounts.Count == 0)
+        {
+            // Legacy / backward-compat path: keys at the root of the file describe a
+            // single mount. Promote them into a synthetic "default" entry so the
+            // rest of the host code only ever has to deal with the array shape.
+            var legacy = ReadMountFromTable(table, sourcePath, LegacyDefaultMountName);
+            if (HasAnyMountField(legacy))
+            {
+                mounts = [legacy];
+            }
+        }
+        else
+        {
+            EnsureMountFieldsAbsentAtRoot(table, sourcePath);
+        }
+
+        EnsureMountNamesUnique(mounts, sourcePath);
+
         return new OsvfsConfigFile
         {
+            Verbose = ReadBool(table, "verbose", sourcePath),
+            LogFormat = ReadLogFormat(table, sourcePath),
+            Mounts = mounts,
+        };
+    }
+
+    /// <summary>
+    /// Reads the <c>[[mount]]</c> array of tables when present; returns an
+    /// empty list otherwise. Each entry is parsed as an
+    /// <see cref="OsvfsMountConfig"/> with all non-mount keys (<c>verbose</c>,
+    /// <c>log-format</c>) intentionally rejected so misplacement is caught
+    /// at parse time.
+    /// </summary>
+    private static List<OsvfsMountConfig> ReadMountArray(TomlTable table, string sourcePath)
+    {
+        if (!table.TryGetValue("mount", out var raw) || raw is null)
+        {
+            return [];
+        }
+        if (raw is not TomlTableArray array)
+        {
+            throw new OsvfsConfigException(
+                $"OSVFS config file '{sourcePath}': 'mount' must be a TOML table array ([[mount]]), " +
+                $"got {raw.GetType().Name}.");
+        }
+
+        var result = new List<OsvfsMountConfig>(array.Count);
+        for (var i = 0; i < array.Count; i++)
+        {
+            var entry = array[i];
+            // The array entries themselves are TomlTables; index them as such so the
+            // shared key readers can be reused for both the legacy root-level form and
+            // each [[mount]] sub-table.
+            var fallbackName = $"mount[{i}]";
+            result.Add(ReadMountFromTable(entry, sourcePath, fallbackName));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Materializes a <see cref="OsvfsMountConfig"/> from a TOML table. The
+    /// table is interpreted as either the legacy root document (when
+    /// <paramref name="defaultName"/> is the legacy default) or a single
+    /// <c>[[mount]]</c> entry, so the same helper can drive both code paths.
+    /// </summary>
+    private static OsvfsMountConfig ReadMountFromTable(TomlTable table, string sourcePath, string defaultName)
+    {
+        var name = ReadString(table, "name", sourcePath) ?? defaultName;
+        return new OsvfsMountConfig
+        {
+            Name = name,
             Provider = ReadProvider(table, sourcePath),
             Bucket = ReadString(table, "bucket", sourcePath),
             RootFolder = ReadString(table, "root-folder", "root_folder", sourcePath),
             EndpointUrl = ReadString(table, "endpoint-url", "endpoint_url", sourcePath),
             Region = ReadString(table, "region", sourcePath),
             Prefix = ReadString(table, "prefix", sourcePath),
-            Verbose = ReadBool(table, "verbose", sourcePath),
             ReadOnly = ReadBool(table, "read-only", "read_only", sourcePath),
             SyncIntervalSeconds = ReadInt(table, "sync-interval-seconds", "sync_interval_seconds", sourcePath),
             ChangeSource = ReadChangeSource(table, sourcePath),
@@ -125,10 +205,100 @@ internal static class OsvfsConfigFileLoader
             BandwidthDown = ReadString(table, "bandwidth-down", "bandwidth_down", sourcePath),
             MultipartThreshold = ReadString(table, "multipart-threshold", "multipart_threshold", sourcePath),
             MultipartPartSize = ReadString(table, "multipart-part-size", "multipart_part_size", sourcePath),
-            LogFormat = ReadLogFormat(table, sourcePath),
             RetryMaxAttempts = ReadInt(table, "retry-max-attempts", "retry_max_attempts", sourcePath),
             AllowUnversioned = ReadBool(table, "allow-unversioned", "allow_unversioned", sourcePath),
         };
+    }
+
+    /// <summary>
+    /// True when the synthesized legacy mount has at least one field set;
+    /// distinguishes "no mount keys at all" (return empty list) from "operator
+    /// is using the legacy single-mount form" (return single entry).
+    /// </summary>
+    private static bool HasAnyMountField(OsvfsMountConfig mount) =>
+        mount.Provider is not null
+        || mount.Bucket is not null
+        || mount.RootFolder is not null
+        || mount.EndpointUrl is not null
+        || mount.Region is not null
+        || mount.Prefix is not null
+        || mount.ReadOnly is not null
+        || mount.SyncIntervalSeconds is not null
+        || mount.ChangeSource is not null
+        || mount.SyncMode is not null
+        || mount.EventQueue is not null
+        || mount.AwsProfile is not null
+        || mount.BandwidthUp is not null
+        || mount.BandwidthDown is not null
+        || mount.MultipartThreshold is not null
+        || mount.MultipartPartSize is not null
+        || mount.RetryMaxAttempts is not null
+        || mount.AllowUnversioned is not null;
+
+    /// <summary>
+    /// When <c>[[mount]]</c> entries are declared, refuse to silently merge
+    /// stray top-level mount keys (e.g. a top-level <c>bucket = "..."</c>
+    /// alongside the array): the precedence would be ambiguous and the
+    /// operator likely intended one form or the other.
+    /// </summary>
+    private static void EnsureMountFieldsAbsentAtRoot(TomlTable table, string sourcePath)
+    {
+        // Keys that belong to a mount and would silently be ignored if mixed
+        // with [[mount]]. 'name' is fine at the root only inside an entry,
+        // never at the document root, so it's listed here too.
+        ReadOnlySpan<string> rootMountKeys =
+        [
+            "name",
+            "provider",
+            "bucket",
+            "root-folder", "root_folder",
+            "endpoint-url", "endpoint_url",
+            "region",
+            "prefix",
+            "read-only", "read_only",
+            "sync-interval-seconds", "sync_interval_seconds",
+            "change-source", "change_source",
+            "sync-mode", "sync_mode",
+            "event-queue", "event_queue",
+            "aws-profile", "aws_profile",
+            "bandwidth-up", "bandwidth_up",
+            "bandwidth-down", "bandwidth_down",
+            "multipart-threshold", "multipart_threshold",
+            "multipart-part-size", "multipart_part_size",
+            "retry-max-attempts", "retry_max_attempts",
+            "allow-unversioned", "allow_unversioned",
+        ];
+
+        foreach (var key in rootMountKeys)
+        {
+            if (table.ContainsKey(key))
+            {
+                throw new OsvfsConfigException(
+                    $"OSVFS config file '{sourcePath}': mount key '{key}' is set at the document " +
+                    "root alongside [[mount]] entries. Move the key inside one of the [[mount]] " +
+                    "tables, or remove the [[mount]] array to use the legacy single-mount form.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Mount names address individual entries on the CLI; duplicates are
+    /// rejected at parse time so an ambiguous <c>--name</c> never reaches
+    /// runtime.
+    /// </summary>
+    private static void EnsureMountNamesUnique(List<OsvfsMountConfig> mounts, string sourcePath)
+    {
+        if (mounts.Count < 2) return;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var mount in mounts)
+        {
+            if (!seen.Add(mount.Name))
+            {
+                throw new OsvfsConfigException(
+                    $"OSVFS config file '{sourcePath}': duplicate mount name '{mount.Name}'. " +
+                    "Each [[mount]] entry must have a unique 'name'.");
+            }
+        }
     }
 
     /// <summary>

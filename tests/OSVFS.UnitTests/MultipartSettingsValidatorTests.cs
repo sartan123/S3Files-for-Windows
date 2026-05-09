@@ -37,7 +37,7 @@ public class MultipartSettingsValidatorTests
             thresholdBytes: 8L * 1024 * 1024,
             partSizeBytes: S3Backend.MinMultipartPartSizeBytes - 1);
         Assert.NotNull(error);
-        Assert.Contains("--multipart-part-size", error, StringComparison.Ordinal);
+        Assert.Contains("multipart-part-size", error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class MultipartSettingsValidatorTests
             thresholdBytes: 0,
             partSizeBytes: S3Backend.MinMultipartPartSizeBytes);
         Assert.NotNull(error);
-        Assert.Contains("--multipart-threshold", error, StringComparison.Ordinal);
+        Assert.Contains("multipart-threshold", error, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -12,7 +12,7 @@ namespace OSVFS.UnitTests.Configuration;
 public class OsvfsConfigFileLoaderTests
 {
     [Fact]
-    public void Parse_returns_all_known_kebab_case_keys()
+    public void Parse_legacy_single_mount_form_returns_one_default_mount_with_all_keys()
     {
         const string toml = """
             provider = "s3"
@@ -34,21 +34,23 @@ public class OsvfsConfigFileLoaderTests
 
         var config = OsvfsConfigFileLoader.ParseContent(toml, "test.toml");
 
-        Assert.Equal(ObjectStoreProvider.S3, config.Provider);
-        Assert.Equal("my-bucket", config.Bucket);
-        Assert.Equal("C:/mount", config.RootFolder);
-        Assert.Equal("http://localhost:4566", config.EndpointUrl);
-        Assert.Equal("ap-northeast-1", config.Region);
-        Assert.Equal("team-a/", config.Prefix);
         Assert.True(config.Verbose);
-        Assert.True(config.ReadOnly);
-        Assert.Equal(15, config.SyncIntervalSeconds);
-        Assert.Equal("prod", config.AwsProfile);
-        Assert.Equal("5M", config.BandwidthUp);
-        Assert.Equal("10M", config.BandwidthDown);
-        Assert.Equal("16M", config.MultipartThreshold);
-        Assert.Equal("32M", config.MultipartPartSize);
         Assert.Equal(LogFormat.Json, config.LogFormat);
+        var mount = Assert.Single(config.Mounts);
+        Assert.Equal(OsvfsConfigFileLoader.LegacyDefaultMountName, mount.Name);
+        Assert.Equal(ObjectStoreProvider.S3, mount.Provider);
+        Assert.Equal("my-bucket", mount.Bucket);
+        Assert.Equal("C:/mount", mount.RootFolder);
+        Assert.Equal("http://localhost:4566", mount.EndpointUrl);
+        Assert.Equal("ap-northeast-1", mount.Region);
+        Assert.Equal("team-a/", mount.Prefix);
+        Assert.True(mount.ReadOnly);
+        Assert.Equal(15, mount.SyncIntervalSeconds);
+        Assert.Equal("prod", mount.AwsProfile);
+        Assert.Equal("5M", mount.BandwidthUp);
+        Assert.Equal("10M", mount.BandwidthDown);
+        Assert.Equal("16M", mount.MultipartThreshold);
+        Assert.Equal("32M", mount.MultipartPartSize);
     }
 
     [Fact]
@@ -85,7 +87,7 @@ public class OsvfsConfigFileLoaderTests
     }
 
     [Fact]
-    public void Parse_accepts_snake_case_aliases()
+    public void Parse_legacy_form_accepts_snake_case_aliases()
     {
         const string toml = """
             bucket = "b"
@@ -102,15 +104,16 @@ public class OsvfsConfigFileLoaderTests
 
         var config = OsvfsConfigFileLoader.ParseContent(toml, "test.toml");
 
-        Assert.Equal("C:/r", config.RootFolder);
-        Assert.Equal("http://e", config.EndpointUrl);
-        Assert.True(config.ReadOnly);
-        Assert.Equal(7, config.SyncIntervalSeconds);
-        Assert.Equal("p", config.AwsProfile);
-        Assert.Equal("1M", config.BandwidthUp);
-        Assert.Equal("2M", config.BandwidthDown);
-        Assert.Equal("8M", config.MultipartThreshold);
-        Assert.Equal("16M", config.MultipartPartSize);
+        var mount = Assert.Single(config.Mounts);
+        Assert.Equal("C:/r", mount.RootFolder);
+        Assert.Equal("http://e", mount.EndpointUrl);
+        Assert.True(mount.ReadOnly);
+        Assert.Equal(7, mount.SyncIntervalSeconds);
+        Assert.Equal("p", mount.AwsProfile);
+        Assert.Equal("1M", mount.BandwidthUp);
+        Assert.Equal("2M", mount.BandwidthDown);
+        Assert.Equal("8M", mount.MultipartThreshold);
+        Assert.Equal("16M", mount.MultipartPartSize);
     }
 
     [Fact]
@@ -123,14 +126,16 @@ public class OsvfsConfigFileLoaderTests
 
         var config = OsvfsConfigFileLoader.ParseContent(toml, "test.toml");
 
-        Assert.Equal("kebab", config.RootFolder);
+        var mount = Assert.Single(config.Mounts);
+        Assert.Equal("kebab", mount.RootFolder);
     }
 
     [Fact]
     public void Parse_provider_is_case_insensitive()
     {
         var config = OsvfsConfigFileLoader.ParseContent("provider = \"S3\"", "test.toml");
-        Assert.Equal(ObjectStoreProvider.S3, config.Provider);
+        var mount = Assert.Single(config.Mounts);
+        Assert.Equal(ObjectStoreProvider.S3, mount.Provider);
     }
 
     [Fact]
@@ -157,16 +162,13 @@ public class OsvfsConfigFileLoaderTests
     }
 
     [Fact]
-    public void Parse_empty_returns_all_nulls()
+    public void Parse_empty_returns_no_mounts_and_null_process_fields()
     {
         var config = OsvfsConfigFileLoader.ParseContent(string.Empty, "test.toml");
 
-        Assert.Null(config.Provider);
-        Assert.Null(config.Bucket);
-        Assert.Null(config.RootFolder);
         Assert.Null(config.Verbose);
-        Assert.Null(config.SyncIntervalSeconds);
-        Assert.Null(config.AllowUnversioned);
+        Assert.Null(config.LogFormat);
+        Assert.Empty(config.Mounts);
     }
 
     [Fact]
@@ -175,8 +177,8 @@ public class OsvfsConfigFileLoaderTests
         var kebab = OsvfsConfigFileLoader.ParseContent("change-source = \"events\"", "test.toml");
         var snake = OsvfsConfigFileLoader.ParseContent("change_source = \"polling\"", "test.toml");
 
-        Assert.Equal(ChangeSourceKind.Events, kebab.ChangeSource);
-        Assert.Equal(ChangeSourceKind.Polling, snake.ChangeSource);
+        Assert.Equal(ChangeSourceKind.Events, Assert.Single(kebab.Mounts).ChangeSource);
+        Assert.Equal(ChangeSourceKind.Polling, Assert.Single(snake.Mounts).ChangeSource);
     }
 
     [Fact]
@@ -193,8 +195,8 @@ public class OsvfsConfigFileLoaderTests
         var kebab = OsvfsConfigFileLoader.ParseContent("sync-mode = \"on-demand\"", "test.toml");
         var snake = OsvfsConfigFileLoader.ParseContent("sync_mode = \"full\"", "test.toml");
 
-        Assert.Equal(SyncMode.OnDemand, kebab.SyncMode);
-        Assert.Equal(SyncMode.Full, snake.SyncMode);
+        Assert.Equal(SyncMode.OnDemand, Assert.Single(kebab.Mounts).SyncMode);
+        Assert.Equal(SyncMode.Full, Assert.Single(snake.Mounts).SyncMode);
     }
 
     [Fact]
@@ -203,15 +205,15 @@ public class OsvfsConfigFileLoaderTests
         var dashed = OsvfsConfigFileLoader.ParseContent("sync-mode = \"on-demand\"", "test.toml");
         var dashless = OsvfsConfigFileLoader.ParseContent("sync-mode = \"ondemand\"", "test.toml");
 
-        Assert.Equal(SyncMode.OnDemand, dashed.SyncMode);
-        Assert.Equal(SyncMode.OnDemand, dashless.SyncMode);
+        Assert.Equal(SyncMode.OnDemand, Assert.Single(dashed.Mounts).SyncMode);
+        Assert.Equal(SyncMode.OnDemand, Assert.Single(dashless.Mounts).SyncMode);
     }
 
     [Fact]
     public void Parse_sync_mode_is_case_insensitive()
     {
         var config = OsvfsConfigFileLoader.ParseContent("sync-mode = \"FULL\"", "test.toml");
-        Assert.Equal(SyncMode.Full, config.SyncMode);
+        Assert.Equal(SyncMode.Full, Assert.Single(config.Mounts).SyncMode);
     }
 
     [Fact]
@@ -223,14 +225,23 @@ public class OsvfsConfigFileLoaderTests
     }
 
     [Fact]
-    public void MergeOverlay_sync_mode_overrides_user_value()
+    public void MergeOverlay_sync_mode_overrides_user_mount()
     {
-        var user = new OsvfsConfigFile { SyncMode = SyncMode.OnDemand };
-        var project = new OsvfsConfigFile { SyncMode = SyncMode.Full };
+        // Process-level (verbose / log-format) merge per key; the mount list
+        // wins outright when the project file has any entries.
+        var user = new OsvfsConfigFile
+        {
+            Mounts = [new OsvfsMountConfig { SyncMode = SyncMode.OnDemand }],
+        };
+        var project = new OsvfsConfigFile
+        {
+            Mounts = [new OsvfsMountConfig { SyncMode = SyncMode.Full }],
+        };
 
         var merged = user.MergeOverlay(project);
 
-        Assert.Equal(SyncMode.Full, merged.SyncMode);
+        var mount = Assert.Single(merged.Mounts);
+        Assert.Equal(SyncMode.Full, mount.SyncMode);
     }
 
     [Fact]
@@ -239,8 +250,8 @@ public class OsvfsConfigFileLoaderTests
         var kebab = OsvfsConfigFileLoader.ParseContent("event-queue = \"q1\"", "test.toml");
         var snake = OsvfsConfigFileLoader.ParseContent("event_queue = \"q2\"", "test.toml");
 
-        Assert.Equal("q1", kebab.EventQueue);
-        Assert.Equal("q2", snake.EventQueue);
+        Assert.Equal("q1", Assert.Single(kebab.Mounts).EventQueue);
+        Assert.Equal("q2", Assert.Single(snake.Mounts).EventQueue);
     }
 
     [Fact]
@@ -249,8 +260,8 @@ public class OsvfsConfigFileLoaderTests
         var kebab = OsvfsConfigFileLoader.ParseContent("allow-unversioned = true", "test.toml");
         var snake = OsvfsConfigFileLoader.ParseContent("allow_unversioned = true", "test.toml");
 
-        Assert.True(kebab.AllowUnversioned);
-        Assert.True(snake.AllowUnversioned);
+        Assert.True(Assert.Single(kebab.Mounts).AllowUnversioned);
+        Assert.True(Assert.Single(snake.Mounts).AllowUnversioned);
     }
 
     [Fact]
@@ -259,8 +270,8 @@ public class OsvfsConfigFileLoaderTests
         var kebab = OsvfsConfigFileLoader.ParseContent("retry-max-attempts = 5", "test.toml");
         var snake = OsvfsConfigFileLoader.ParseContent("retry_max_attempts = 7", "test.toml");
 
-        Assert.Equal(5, kebab.RetryMaxAttempts);
-        Assert.Equal(7, snake.RetryMaxAttempts);
+        Assert.Equal(5, Assert.Single(kebab.Mounts).RetryMaxAttempts);
+        Assert.Equal(7, Assert.Single(snake.Mounts).RetryMaxAttempts);
     }
 
     [Fact]
@@ -272,27 +283,152 @@ public class OsvfsConfigFileLoaderTests
     }
 
     [Fact]
-    public void MergeOverlay_retry_max_attempts_overrides_user_value()
+    public void Parse_mount_array_returns_named_entries_in_declaration_order()
     {
-        var user = new OsvfsConfigFile { RetryMaxAttempts = 3 };
-        var project = new OsvfsConfigFile { RetryMaxAttempts = 8 };
+        const string toml = """
+            verbose = true
 
-        var merged = user.MergeOverlay(project);
+            [[mount]]
+            name = "personal"
+            bucket = "my-personal"
+            root-folder = "C:/mounts/personal"
 
-        Assert.Equal(8, merged.RetryMaxAttempts);
+            [[mount]]
+            name = "work"
+            bucket = "my-work"
+            root-folder = "C:/mounts/work"
+            prefix = "team-a/"
+            """;
+
+        var config = OsvfsConfigFileLoader.ParseContent(toml, "test.toml");
+
+        Assert.True(config.Verbose);
+        Assert.Equal(2, config.Mounts.Count);
+        Assert.Equal("personal", config.Mounts[0].Name);
+        Assert.Equal("my-personal", config.Mounts[0].Bucket);
+        Assert.Equal("C:/mounts/personal", config.Mounts[0].RootFolder);
+        Assert.Equal("work", config.Mounts[1].Name);
+        Assert.Equal("my-work", config.Mounts[1].Bucket);
+        Assert.Equal("team-a/", config.Mounts[1].Prefix);
     }
 
     [Fact]
-    public void MergeOverlay_overlay_overrides_user_per_key()
+    public void Parse_mount_array_without_explicit_name_synthesizes_indexed_name()
     {
-        var user = new OsvfsConfigFile { Bucket = "user", Region = "us-east-1" };
-        var project = new OsvfsConfigFile { Bucket = "project", Verbose = true };
+        // Operators may forget to set 'name'; the loader tags such entries with
+        // a 'mount[i]' fallback so the duplicate-name check (and CLI selection)
+        // still has a stable handle.
+        const string toml = """
+            [[mount]]
+            bucket = "first"
+
+            [[mount]]
+            bucket = "second"
+            """;
+
+        var config = OsvfsConfigFileLoader.ParseContent(toml, "test.toml");
+
+        Assert.Equal(2, config.Mounts.Count);
+        Assert.Equal("mount[0]", config.Mounts[0].Name);
+        Assert.Equal("mount[1]", config.Mounts[1].Name);
+    }
+
+    [Fact]
+    public void Parse_duplicate_mount_names_throws()
+    {
+        const string toml = """
+            [[mount]]
+            name = "alpha"
+            bucket = "first"
+
+            [[mount]]
+            name = "alpha"
+            bucket = "second"
+            """;
+
+        var ex = Assert.Throws<OsvfsConfigException>(() =>
+            OsvfsConfigFileLoader.ParseContent(toml, "test.toml"));
+        Assert.Contains("duplicate", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("alpha", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_mount_array_alongside_root_level_keys_throws()
+    {
+        // Mixing the legacy single-mount form with the [[mount]] array would
+        // make precedence ambiguous; the parser refuses to guess.
+        const string toml = """
+            bucket = "stray"
+
+            [[mount]]
+            name = "alpha"
+            bucket = "alpha-bucket"
+            """;
+
+        var ex = Assert.Throws<OsvfsConfigException>(() =>
+            OsvfsConfigFileLoader.ParseContent(toml, "test.toml"));
+        Assert.Contains("bucket", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_mount_must_be_table_array()
+    {
+        // 'mount' as a single inline table (not [[mount]]) is rejected so the
+        // operator gets an explicit error instead of having keys silently
+        // disappear.
+        var ex = Assert.Throws<OsvfsConfigException>(() =>
+            OsvfsConfigFileLoader.ParseContent("mount = \"oops\"", "test.toml"));
+        Assert.Contains("mount", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MergeOverlay_project_mount_list_replaces_user_when_project_has_entries()
+    {
+        var user = new OsvfsConfigFile
+        {
+            Verbose = false,
+            Mounts =
+            [
+                new OsvfsMountConfig { Name = "user-only", Bucket = "user-bucket" },
+            ],
+        };
+        var project = new OsvfsConfigFile
+        {
+            Verbose = true,
+            Mounts =
+            [
+                new OsvfsMountConfig { Name = "alpha", Bucket = "alpha-bucket" },
+                new OsvfsMountConfig { Name = "beta", Bucket = "beta-bucket" },
+            ],
+        };
 
         var merged = user.MergeOverlay(project);
 
-        Assert.Equal("project", merged.Bucket);
-        Assert.Equal("us-east-1", merged.Region);
         Assert.True(merged.Verbose);
+        Assert.Equal(2, merged.Mounts.Count);
+        Assert.Equal("alpha", merged.Mounts[0].Name);
+        Assert.Equal("beta", merged.Mounts[1].Name);
+    }
+
+    [Fact]
+    public void MergeOverlay_project_keeps_user_mounts_when_project_has_none()
+    {
+        var user = new OsvfsConfigFile
+        {
+            Mounts =
+            [
+                new OsvfsMountConfig { Name = "user-only", Bucket = "user-bucket" },
+            ],
+        };
+        // Project sets a process-level field but no mounts; user mounts should
+        // survive so the user can keep their default mount list across both
+        // files.
+        var project = new OsvfsConfigFile { Verbose = true };
+
+        var merged = user.MergeOverlay(project);
+
+        Assert.True(merged.Verbose);
+        Assert.Equal("user-bucket", Assert.Single(merged.Mounts).Bucket);
     }
 
     [Fact]
@@ -310,7 +446,7 @@ public class OsvfsConfigFileLoaderTests
     }
 
     [Fact]
-    public void LoadFromPaths_project_file_overrides_user_file_per_key()
+    public void LoadFromPaths_project_legacy_mount_replaces_user_legacy_mount()
     {
         using var fs = new TempFiles();
         var userPath = fs.Write("user.toml", """
@@ -326,9 +462,12 @@ public class OsvfsConfigFileLoaderTests
         var merged = OsvfsConfigFileLoader.LoadFromPaths(userPath, projectPath);
 
         Assert.NotNull(merged);
-        Assert.Equal("project-bucket", merged.Bucket);
-        Assert.Equal("us-east-1", merged.Region);
         Assert.True(merged.Verbose);
+        var mount = Assert.Single(merged.Mounts);
+        // Project file defines its own legacy mount, so the user's region is
+        // not carried over (mount lists merge as a unit, not field-by-field).
+        Assert.Equal("project-bucket", mount.Bucket);
+        Assert.Null(mount.Region);
     }
 
     [Fact]
@@ -340,7 +479,7 @@ public class OsvfsConfigFileLoaderTests
         var merged = OsvfsConfigFileLoader.LoadFromPaths(userPath, fs.PathFor("absent.toml"));
 
         Assert.NotNull(merged);
-        Assert.Equal("user-only", merged.Bucket);
+        Assert.Equal("user-only", Assert.Single(merged.Mounts).Bucket);
     }
 
     /// <summary>

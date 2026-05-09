@@ -4,141 +4,23 @@ using OSVFS;
 using OSVFS.Configuration;
 using OSVFS.Credentials;
 using OSVFS.Logging;
-using OSVFS.Net;
-using OSVFS.ObjectStore;
 using OSVFS.ProjFs;
 
-const int ExitSuccess = 0;
 const int ExitGeneralException = 2;
 
-var providerOption = new Option<ObjectStoreProvider?>("--provider")
-{
-    Description = "Object-store provider backing the virtualization root. Currently only 's3' is fully implemented; 'gcs' and 'azureblob' fail at startup.",
-};
-
-var bucketOption = new Option<string?>("--bucket")
-{
-    Description = "Bucket (S3/GCS) or container (Azure) that will be accessible through the file system. Required, but may also be supplied via osvfs.toml.",
-};
-
-var rootFolderOption = new Option<string?>("--root-folder")
-{
-    Description = "Path to the virtualization root. Required, but may also be supplied via osvfs.toml.",
-};
-
-var endpointUrlOption = new Option<string?>("--endpoint-url")
-{
-    Description = "Override command's default URL with the given URL.",
-};
-
-var regionOption = new Option<string?>("--region")
-{
-    Description = "AWS region (e.g. us-east-1, ap-northeast-1). When omitted, the SDK falls back to the standard credential/region resolution chain (env vars, profile, IMDS).",
-};
-
-var prefixOption = new Option<string?>("--prefix")
-{
-    Description = "Optional key prefix within the bucket. When set, only objects under this prefix are projected into the virtualization root.",
-};
-
-var verboseOption = new Option<bool>("--verbose")
-{
-    Description = "Use verbose log level.",
-};
-
-var readOnlyOption = new Option<bool>("--read-only")
-{
-    Description = "Read-only mode.",
-    Hidden = true,
-};
-
-var syncIntervalOption = new Option<int?>("--sync-interval-seconds")
-{
-    Description = "Polling interval (seconds) for detecting external S3 changes. 0 disables.",
-};
-
-var changeSourceOption = new Option<ChangeSourceKind?>("--change-source")
-{
-    Description = "Strategy for detecting external object-store changes: 'polling' (re-list bucket on --sync-interval-seconds) or 'events' (long-poll an SQS queue carrying EventBridge S3 notifications; requires --event-queue).",
-};
-
-var syncModeOption = new Option<string?>("--sync-mode")
-{
-    Description = "Polling reconciliation strategy: 'on-demand' (default; re-list only directories the user has visited via ProjFS — scales with visited dirs, not bucket size) or 'full' (re-list entire bucket each tick — preserves the original Phase 1 behavior).",
-};
-
-var eventQueueOption = new Option<string?>("--event-queue")
-{
-    Description = "SQS queue URL or queue name carrying EventBridge S3 notifications for the bucket. Required when --change-source is 'events'. See README for the necessary EventBridge rule + IAM policy.",
-};
-
-var awsProfileOption = new Option<string?>("--aws-profile")
-{
-    Description = "Use credentials previously saved by 'osvfs credentials set --profile <name>' (encrypted with DPAPI in Windows Credential Manager).",
-};
-
-var bandwidthUpOption = new Option<string?>("--bandwidth-up")
-{
-    Description = "Upload bandwidth ceiling. Plain bytes/s by default; suffixes K/M/G mean KiB/s, MiB/s, GiB/s (e.g. '5M' = 5 MiB/s). Omit or set to 0 to disable.",
-};
-
-var bandwidthDownOption = new Option<string?>("--bandwidth-down")
-{
-    Description = "Download bandwidth ceiling. Plain bytes/s by default; suffixes K/M/G mean KiB/s, MiB/s, GiB/s (e.g. '10M' = 10 MiB/s). Omit or set to 0 to disable.",
-};
-
-var multipartThresholdOption = new Option<string?>("--multipart-threshold")
-{
-    Description = "Stream size at or above which uploads are routed through the multipart path. Same K/M/G suffixes as --bandwidth-up. Defaults to 8M.",
-};
-
-var multipartPartSizeOption = new Option<string?>("--multipart-part-size")
-{
-    Description = "Per-part size used by multipart uploads. Must be between 5M and 5G; the last part may be smaller. Defaults to 5M.",
-};
-
-var logFormatOption = new Option<LogFormat?>("--log-format")
-{
-    Description = "Console log output format. 'text' (default) writes single-line human-readable output; 'json' writes one JSON object per line with UTC timestamps for log shippers (Datadog, Loki, etc.).",
-};
-
-var allowUnversionedOption = new Option<bool>("--allow-unversioned")
-{
-    Description = "DANGER: Skip the bucket-versioning safety check and run against a bucket without versioning. Local edits and deletes become unrecoverable. Intended for CI / disposable buckets only.",
-};
-
-var retryMaxAttemptsOption = new Option<int?>("--retry-max-attempts")
-{
-    Description = "Total attempts (initial + retries) the AWS SDK makes on transient failures (5xx, request timeouts, throttling, network errors). Defaults to 3. 1 disables retries; 4xx errors fail immediately regardless.",
-};
-
+var cliOptions = new MountCliOptions();
 var credentialStore = new WindowsCredentialStore();
 
-var rootCommand = new RootCommand("OSVFS — Object Storage Virtual File System for Windows: mount a cloud object-store bucket/container as a local folder via ProjFS.")
-{
-    providerOption,
-    bucketOption,
-    rootFolderOption,
-    endpointUrlOption,
-    regionOption,
-    prefixOption,
-    verboseOption,
-    readOnlyOption,
-    syncIntervalOption,
-    changeSourceOption,
-    syncModeOption,
-    eventQueueOption,
-    awsProfileOption,
-    bandwidthUpOption,
-    bandwidthDownOption,
-    multipartThresholdOption,
-    multipartPartSizeOption,
-    logFormatOption,
-    allowUnversionedOption,
-    retryMaxAttemptsOption,
-};
+var rootCommand = new RootCommand(
+    "OSVFS — Object Storage Virtual File System for Windows: mount a cloud object-store " +
+    "bucket/container as a local folder via ProjFS. Mounts are configured exclusively " +
+    "through osvfs.toml / %APPDATA%\\OSVFS\\config.toml; only --verbose / --log-format are " +
+    "accepted on the command line as one-off process-level overrides.");
+cliOptions.AddTo(rootCommand);
 
 rootCommand.Subcommands.Add(CredentialsCommandFactory.Build(credentialStore));
+rootCommand.Subcommands.Add(MountCommandFactory.BuildMountCommand(credentialStore, cliOptions));
+rootCommand.Subcommands.Add(MountCommandFactory.BuildMountAllCommand(credentialStore, cliOptions));
 
 rootCommand.SetAction(parseResult =>
 {
@@ -153,132 +35,56 @@ rootCommand.SetAction(parseResult =>
         return ExitGeneralException;
     }
 
-    var verbose = GetCliBool(parseResult, verboseOption) ?? fileConfig?.Verbose ?? false;
-    var logFormat = parseResult.GetValue(logFormatOption) ?? fileConfig?.LogFormat ?? LogFormat.Text;
+    var verbose = cliOptions.GetVerbose(parseResult) ?? fileConfig?.Verbose ?? false;
+    var logFormat = parseResult.GetValue(cliOptions.LogFormat) ?? fileConfig?.LogFormat ?? LogFormat.Text;
 
     using var loggerFactory = LogConsoleFactory.Create(verbose, logFormat);
-
     var logger = loggerFactory.CreateLogger("OSVFS");
 
-    var bucket = parseResult.GetValue(bucketOption) ?? fileConfig?.Bucket;
-    if (string.IsNullOrEmpty(bucket))
+    if (fileConfig is null || fileConfig.Mounts.Count == 0)
     {
         logger.LogError(
-            "--bucket is required. Pass it on the command line or set 'bucket' in osvfs.toml / %APPDATA%/OSVFS/config.toml.");
+            "No mount is configured. Create osvfs.toml in the current directory or " +
+            "%APPDATA%\\OSVFS\\config.toml with at least 'bucket' and 'root-folder' (legacy " +
+            "single-mount form) or one or more [[mount]] entries.");
         return ExitGeneralException;
     }
 
-    var rootFolder = parseResult.GetValue(rootFolderOption) ?? fileConfig?.RootFolder;
-    if (string.IsNullOrEmpty(rootFolder))
+    // Multi-mount configs cannot be resolved by the bare root command because the
+    // CLI has no per-mount overrides any more. Push the operator toward the named
+    // subcommands so the intent is unambiguous.
+    if (fileConfig.Mounts.Count > 1)
     {
         logger.LogError(
-            "--root-folder is required. Pass it on the command line or set 'root-folder' in osvfs.toml / %APPDATA%/OSVFS/config.toml.");
+            "Config defines {Count} mounts; the bare root command runs only when a single " +
+            "mount is configured. Use 'osvfs mount-all' to start every mount in this process, " +
+            "or 'osvfs mount --name <one-of: {Names}>' to start one.",
+            fileConfig.Mounts.Count,
+            string.Join(", ", fileConfig.Mounts.Select(m => m.Name)));
         return ExitGeneralException;
     }
 
-    var profileName = parseResult.GetValue(awsProfileOption) ?? fileConfig?.AwsProfile;
-    AwsCredential? credentials;
+    var mountConfig = fileConfig.Mounts[0];
+
+    ProjFsProviderOptions options;
     try
     {
-        credentials = ResolveCredential(credentialStore, profileName, logger);
+        options = MountOptionsBuilder.Build(mountConfig, credentialStore, logger);
     }
-    catch (Exception ex)
-    {
-        logger.LogCritical(ex, "Failed to load AWS profile '{Profile}'", profileName);
-        return ExitGeneralException;
-    }
-
-    BandwidthLimits bandwidthLimits;
-    long? multipartThresholdBytes;
-    long? multipartPartSizeBytes;
-    try
-    {
-        bandwidthLimits = new BandwidthLimits(
-            UpBytesPerSecond: BandwidthSize.Parse(
-                parseResult.GetValue(bandwidthUpOption) ?? fileConfig?.BandwidthUp),
-            DownBytesPerSecond: BandwidthSize.Parse(
-                parseResult.GetValue(bandwidthDownOption) ?? fileConfig?.BandwidthDown));
-
-        multipartThresholdBytes = BandwidthSize.Parse(
-            parseResult.GetValue(multipartThresholdOption) ?? fileConfig?.MultipartThreshold);
-        multipartPartSizeBytes = BandwidthSize.Parse(
-            parseResult.GetValue(multipartPartSizeOption) ?? fileConfig?.MultipartPartSize);
-    }
-    catch (FormatException ex)
+    catch (OsvfsConfigException ex)
     {
         logger.LogError("{Message}", ex.Message);
         return ExitGeneralException;
     }
 
-    if (MultipartSettingsValidator.Validate(multipartThresholdBytes, multipartPartSizeBytes) is { } error)
-    {
-        logger.LogError("{Message}", error);
-        return ExitGeneralException;
-    }
-
-    var retryMaxAttempts = parseResult.GetValue(retryMaxAttemptsOption) ?? fileConfig?.RetryMaxAttempts;
-    if (retryMaxAttempts is < 1)
-    {
-        logger.LogError(
-            "--retry-max-attempts must be at least 1 (got {Value}).",
-            retryMaxAttempts);
-        return ExitGeneralException;
-    }
-
-    var changeSource = parseResult.GetValue(changeSourceOption)
-        ?? fileConfig?.ChangeSource
-        ?? ChangeSourceKind.Polling;
-    var eventQueue = parseResult.GetValue(eventQueueOption) ?? fileConfig?.EventQueue;
-    if (changeSource is ChangeSourceKind.Events && string.IsNullOrEmpty(eventQueue))
-    {
-        logger.LogError(
-            "--change-source 'events' requires --event-queue (an SQS queue URL or name). " +
-            "See README for the necessary S3 → EventBridge → SQS setup.");
-        return ExitGeneralException;
-    }
-
-    SyncMode syncMode;
-    var rawSyncMode = parseResult.GetValue(syncModeOption);
-    if (!string.IsNullOrEmpty(rawSyncMode))
-    {
-        if (!TryParseSyncMode(rawSyncMode, out syncMode))
-        {
-            logger.LogError(
-                "--sync-mode '{Mode}' is not recognized. Expected one of: on-demand, full.",
-                rawSyncMode);
-            return ExitGeneralException;
-        }
-    }
-    else
-    {
-        syncMode = fileConfig?.SyncMode ?? SyncMode.OnDemand;
-    }
-
-    var options = new ProjFsProviderOptions
-    {
-        Provider = parseResult.GetValue(providerOption) ?? fileConfig?.Provider ?? ObjectStoreProvider.S3,
-        Bucket = bucket,
-        VirtRoot = rootFolder,
-        EndpointUrl = parseResult.GetValue(endpointUrlOption) ?? fileConfig?.EndpointUrl,
-        Region = parseResult.GetValue(regionOption) ?? fileConfig?.Region,
-        KeyPrefix = parseResult.GetValue(prefixOption) ?? fileConfig?.Prefix,
-        Verbose = verbose,
-        ReadOnly = GetCliBool(parseResult, readOnlyOption) ?? fileConfig?.ReadOnly ?? false,
-        SyncIntervalSeconds = parseResult.GetValue(syncIntervalOption) ?? fileConfig?.SyncIntervalSeconds ?? 30,
-        ChangeSource = parseResult.GetValue(changeSourceOption) ?? fileConfig?.ChangeSource ?? ChangeSourceKind.Polling,
-        SyncMode = syncMode,
-        EventQueue = parseResult.GetValue(eventQueueOption) ?? fileConfig?.EventQueue,
-        Credentials = credentials,
-        BandwidthLimits = bandwidthLimits,
-        MultipartThresholdBytes = multipartThresholdBytes,
-        MultipartPartSizeBytes = multipartPartSizeBytes,
-        RetryMaxAttempts = retryMaxAttempts,
-        AllowUnversioned = GetCliBool(parseResult, allowUnversionedOption) ?? fileConfig?.AllowUnversioned ?? false,
-    };
+    options = options with { Verbose = verbose };
 
     try
     {
-        return RunProvider(options, loggerFactory, logger);
+        return MountHost.Run(
+            [new MountHost.MountInvocation(mountConfig.Name, options)],
+            loggerFactory,
+            logger);
     }
     catch (BucketVersioningNotEnabledException ex)
     {
@@ -296,52 +102,3 @@ rootCommand.SetAction(parseResult =>
 });
 
 return rootCommand.Parse(args).Invoke();
-
-// Returns the boolean value of a flag-style option, but only when the user
-// explicitly passed it; returns null when the option was defaulted, so callers
-// can fall through to the TOML config or built-in default.
-static bool? GetCliBool(ParseResult parseResult, Option<bool> option)
-{
-    var result = parseResult.GetResult(option);
-    if (result is null || result.Implicit) return null;
-    return parseResult.GetValue(option);
-}
-
-// Accepts the CLI-friendly "on-demand" alongside the raw enum literal "ondemand"
-// and the case-insensitive "full". Centralized so Program.cs and the TOML loader
-// agree on which spellings are valid.
-static bool TryParseSyncMode(string raw, out SyncMode mode)
-{
-    var normalized = raw.Replace("-", string.Empty);
-    return Enum.TryParse(normalized, ignoreCase: true, out mode);
-}
-
-// Resolves an --aws-profile name against the credential store. Returns null when no
-// profile is requested; throws when the requested profile is missing.
-static AwsCredential? ResolveCredential(IAwsCredentialStore store, string? profileName, ILogger logger)
-{
-    if (string.IsNullOrEmpty(profileName)) return null;
-    var credential = store.Load(profileName)
-        ?? throw new InvalidOperationException(
-            $"AWS profile '{profileName}' was not found in the OSVFS credential store. " +
-            "Run 'osvfs credentials set --profile <name>' to create it.");
-    logger.LogInformation("Using AWS credentials from profile '{Profile}'.", profileName);
-    return credential;
-}
-
-// Constructs the provider, starts virtualization, and blocks on stdin until the user exits.
-static int RunProvider(ProjFsProviderOptions options, ILoggerFactory loggerFactory, ILogger logger)
-{
-    using var provider = new ProjFsProvider(
-        options, loggerFactory.CreateLogger<ProjFsProvider>(), loggerFactory);
-    if (!provider.StartVirtualization())
-    {
-        logger.LogError("Failed to start provider.");
-        return ExitGeneralException;
-    }
-
-    logger.LogInformation("Virtualizing s3://{Bucket} at {Root}", options.Bucket, options.VirtRoot);
-    logger.LogInformation("Press Enter to exit.");
-    Console.ReadLine();
-    return ExitSuccess;
-}
