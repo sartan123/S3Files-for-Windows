@@ -41,6 +41,7 @@ internal sealed class ObjectStoreChangeWatcher : IAsyncDisposable
 
     private readonly IChangeSource source;
     private readonly ILocalMutationRecorder? sourceRecorder;
+    private readonly IDirectoryWatchRegistrar? sourceRegistrar;
     private readonly IProjFsCommandSink commandSink;
     private readonly ILostAndFoundQuarantine quarantine;
     private readonly ILogger<ObjectStoreChangeWatcher> logger;
@@ -69,10 +70,31 @@ internal sealed class ObjectStoreChangeWatcher : IAsyncDisposable
     {
         this.source = source;
         this.sourceRecorder = source as ILocalMutationRecorder;
+        this.sourceRegistrar = source as IDirectoryWatchRegistrar;
         this.commandSink = commandSink;
         this.quarantine = quarantine;
         this.logger = logger;
     }
+
+    /// <summary>
+    /// True when the underlying change source maintains a per-directory watch
+    /// set (i.e. on-demand polling). The host uses this to gate watch-set
+    /// seeding and ProjFS-callback hookups.
+    /// </summary>
+    public bool SupportsDirectoryWatchRegistration => sourceRegistrar is not null;
+
+    /// <summary>
+    /// Number of directories the underlying source currently has under watch
+    /// (zero when the source doesn't track per-directory state).
+    /// </summary>
+    public int WatchedDirectoryCount => sourceRegistrar?.WatchedDirectoryCount ?? 0;
+
+    /// <summary>
+    /// Forwards a directory enumeration to the underlying source's watch set.
+    /// No-op when the source doesn't track per-directory state.
+    /// </summary>
+    public void RegisterWatchedDirectory(string relativeDirectory) =>
+        sourceRegistrar?.RegisterWatchedDirectory(relativeDirectory ?? string.Empty);
 
     /// <summary>
     /// Starts a background task that pumps events from the change source until

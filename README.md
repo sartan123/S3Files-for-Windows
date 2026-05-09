@@ -137,6 +137,7 @@ Open `C:\Users\you\OSVFS` in Explorer and the bucket contents appear.
 | `--prefix` | Optional key prefix within the bucket. When set, only objects under this prefix are projected into the virtualization root. | — |
 | `--sync-interval-seconds` | Polling interval for detecting external object-store changes; `0` disables. Used by `polling` mode. | `30` |
 | `--change-source` | Strategy for detecting external object-store changes: `polling` (re-list bucket on `--sync-interval-seconds`) or `events` (long-poll an SQS queue carrying EventBridge S3 notifications). See [Change detection modes](#change-detection-modes). | `polling` |
+| `--sync-mode` | Polling reconciliation strategy: `on-demand` (re-list only directories the user has visited via ProjFS — scales with visited dirs, not bucket size) or `full` (re-list the whole bucket every tick — preserves the original Phase&nbsp;1 behavior). See [On-demand sync](#on-demand-sync). Only consulted when `--change-source` is `polling`. | `on-demand` |
 | `--event-queue` | SQS queue URL or queue name carrying EventBridge S3 notifications for the bucket. **Required** when `--change-source` is `events`. | — |
 | `--bandwidth-up` | Upload bandwidth ceiling. Plain bytes/s by default; suffixes `K`/`M`/`G` mean KiB/s, MiB/s, GiB/s (e.g. `5M` = 5 MiB/s). Omit or set to `0` to disable. | — (unlimited) |
 | `--bandwidth-down` | Download bandwidth ceiling. Same format as `--bandwidth-up`. | — (unlimited) |
@@ -306,24 +307,36 @@ osvfs `
 > One queue per virtualization root. Two `osvfs` instances sharing a queue
 > would each see only half of the messages.
 
+### On-demand sync
+
+`polling` mode supports two reconciliation strategies via `--sync-mode`:
+
+| Mode | What gets re-listed each tick | API cost | When to use |
+| --- | --- | --- | --- |
+| `on-demand` (default) | Only the directories the user has actually visited through ProjFS, plus their ancestor chain | Scales with the **visited-directory count**, independent of bucket size | The default — matches ProjFS's on-demand model and the AWS S3 Files [synchronization design](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files-synchronization.html). |
+| `full` | The entire bucket (or `--prefix` subtree) | Scales with **total object count** (one `ListObjectsV2` page per 1000 keys, every tick) | When you need the bucket-wide source-of-truth guarantee, or for small/quiet buckets where the cost is negligible. Preserves the original Phase&nbsp;1 behavior. |
+
 ### Sync interval for large buckets
 
 `osvfs` detects external object-store changes by re-listing the bucket every
-`--sync-interval-seconds` (default `30`). Each poll walks every page of
-ListObjectsV2 (`NextContinuationToken` is threaded automatically), so the
-entire bucket — or the configured `--prefix` sub-tree — is scanned on every
-tick.
+`--sync-interval-seconds` (default `30`). Under `--sync-mode=full` each poll
+walks every page of `ListObjectsV2` for the configured prefix; under
+`--sync-mode=on-demand` each poll re-lists every visited directory once with
+`Delimiter='/'` (one paged request per directory).
 
-Because S3 caps a single ListObjectsV2 page at 1000 keys, the wall time of a
-poll grows roughly linearly with the number of objects under the watched
-prefix. As a rough planning guide, a single ListObjectsV2 page typically
-returns in tens to low-hundreds of milliseconds against AWS S3 from a nearby
-region, so a 100k-object bucket needs ~100 round-trips and a few seconds of
-listing per tick. If the listing time approaches `--sync-interval-seconds`,
-raise the interval (or scope the projection with `--prefix`) so polls do not
-overlap and starve other I/O. The integration test
-`S3BackendListPaginationTests` logs the observed `ms / 1000 keys` against
-LocalStack and is the easiest place to dial in a per-environment number.
+Under `full` mode the wall time of a poll grows roughly linearly with the
+number of objects under the watched prefix because S3 caps a single
+`ListObjectsV2` page at 1000 keys. As a rough planning guide, a single
+`ListObjectsV2` page typically returns in tens to low-hundreds of
+milliseconds against AWS S3 from a nearby region, so a 100k-object bucket
+needs ~100 round-trips and a few seconds of listing per tick. If the listing
+time approaches `--sync-interval-seconds`, raise the interval (or scope the
+projection with `--prefix`) so polls do not overlap and starve other I/O.
+
+Under `on-demand` mode the cost instead scales with the number of visited
+directories, so a bucket with 100 directories each containing 10k files
+costs roughly one paged `ListObjectsV2` per directory the user has opened,
+not one per 1000 keys in the bucket.
 
 ### Structured logging
 
@@ -402,6 +415,7 @@ allow-unversioned    = false                     # DANGER: skip the bucket-versi
 verbose              = false
 sync-interval-seconds = 30
 change-source        = "polling"                 # "polling" | "events"
+sync-mode            = "on-demand"               # "on-demand" | "full" — only used by polling
 event-queue          = ""                        # SQS URL/name, required for events
 ```
 
@@ -521,9 +535,14 @@ Roughly:
 - [`ObjectStoreChangeWatcher`](src/OSVFS.Core/Sync/ObjectStoreChangeWatcher.cs)
   applies external bucket changes back into ProjFS. Changes are discovered
   through pluggable [`IChangeSource`](src/OSVFS.Core/Sync/IChangeSource.cs)
-  implementations: [`PollingChangeSource`](src/OSVFS.Core/Sync/PollingChangeSource.cs)
-  re-lists the bucket on a fixed cadence and diffs against an in-memory
-  snapshot, while [`SqsChangeSource`](src/OSVFS.Core/Sync/Sqs/SqsChangeSource.cs)
+  implementations:
+  [`OnDemandPollingChangeSource`](src/OSVFS.Core/Sync/OnDemandPollingChangeSource.cs)
+  (the default) re-lists only the directories the user has visited via
+  ProjFS using `Delimiter='/'`,
+  [`PollingChangeSource`](src/OSVFS.Core/Sync/PollingChangeSource.cs)
+  re-lists the entire bucket on a fixed cadence and diffs against an
+  in-memory snapshot (selected by `--sync-mode=full`), and
+  [`SqsChangeSource`](src/OSVFS.Core/Sync/Sqs/SqsChangeSource.cs)
   long-polls an SQS queue carrying EventBridge S3 notifications. The object
   store is treated as the source of truth: if a remote change collides with
   an unsynced local edit, the local copy is moved to a `.osvfs-lost+found`

@@ -118,6 +118,7 @@ internal static class OsvfsConfigFileLoader
             ReadOnly = ReadBool(table, "read-only", "read_only", sourcePath),
             SyncIntervalSeconds = ReadInt(table, "sync-interval-seconds", "sync_interval_seconds", sourcePath),
             ChangeSource = ReadChangeSource(table, sourcePath),
+            SyncMode = ReadSyncMode(table, sourcePath),
             EventQueue = ReadString(table, "event-queue", "event_queue", sourcePath),
             AwsProfile = ReadString(table, "aws-profile", "aws_profile", sourcePath),
             BandwidthUp = ReadString(table, "bandwidth-up", "bandwidth_up", sourcePath),
@@ -238,6 +239,22 @@ internal static class OsvfsConfigFileLoader
         throw new OsvfsConfigException(
             $"OSVFS config file '{sourcePath}': unknown change-source '{raw}'. Expected one of: " +
             string.Join(", ", Enum.GetNames<ChangeSourceKind>()).ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// Reads <c>sync-mode</c> as a case-insensitive enum literal. Accepts the
+    /// same tokens as the <c>--sync-mode</c> CLI flag (<c>on-demand</c> / <c>full</c>).
+    /// </summary>
+    private static SyncMode? ReadSyncMode(TomlTable table, string sourcePath)
+    {
+        var raw = ReadString(table, "sync-mode", "sync_mode", sourcePath);
+        if (raw is null) return null;
+        // Accept the kebab-case literal "on-demand" used on the CLI; the enum form has no dash.
+        var normalized = raw.Replace("-", string.Empty);
+        if (Enum.TryParse<SyncMode>(normalized, ignoreCase: true, out var parsed))
+            return parsed;
+        throw new OsvfsConfigException(
+            $"OSVFS config file '{sourcePath}': unknown sync-mode '{raw}'. Expected one of: on-demand, full.");
     }
 }
 

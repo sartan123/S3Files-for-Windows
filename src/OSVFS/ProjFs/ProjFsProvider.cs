@@ -153,6 +153,15 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
         virtualizationInstanceStarted = true;
 
+        // Seed the on-demand watch set from existing placeholder directories before the
+        // first reconcile tick fires. ProjFS persists placeholders across runs, so the
+        // directories the user visited previously stay materialized — replaying them
+        // restores the same polling coverage they had before exit.
+        if (changeWatcher is not null)
+        {
+            WatchSetSeeder.Seed(syncRootPath, changeWatcher, logger);
+        }
+
         // The watcher is fire-and-forget: it self-cancels on Dispose. Polling only starts
         // after virtualization is up so the command sink is safe to call.
         _ = changeWatcher?.StartAsync(CancellationToken.None);
@@ -187,6 +196,8 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     /// <summary>
     /// ProjFS callback: lists the immediate children of <paramref name="relativePath"/>
     /// and registers an enumeration session under <paramref name="enumerationId"/>.
+    /// Also registers the directory in the change watcher's on-demand watch set so
+    /// future polling ticks reconcile it.
     /// </summary>
     public HResult StartDirectoryEnumerationCallback(
         int commandId,
@@ -197,6 +208,12 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     {
         try
         {
+            // Register the visited directory before listing so a concurrent reconcile
+            // pass that races with this enumeration sees the new entry on the next tick.
+            // Safe to call even when the watcher is null (read-only mode) or doesn't
+            // support per-directory watches (full polling, SQS).
+            changeWatcher?.RegisterWatchedDirectory(relativePath ?? string.Empty);
+
             var entries = ListDirectoryAsync(relativePath ?? string.Empty).GetAwaiter().GetResult();
             var session = new DirectoryEnumerationSession(entries);
             return activeEnumerations.TryAdd(enumerationId, session) ? HResult.Ok : HResult.InternalError;
@@ -516,10 +533,23 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
                         Options.SyncIntervalSeconds);
                     return null;
                 }
-                return new PollingChangeSource(
+                if (Options.SyncMode == SyncMode.Full)
+                {
+                    logger.LogInformation(
+                        "Polling in full mode: re-listing entire bucket every {Interval}s.",
+                        Options.SyncIntervalSeconds);
+                    return new PollingChangeSource(
+                        backend,
+                        TimeSpan.FromSeconds(Options.SyncIntervalSeconds),
+                        loggerFactory.CreateLogger<PollingChangeSource>());
+                }
+                logger.LogInformation(
+                    "Polling in on-demand mode: re-listing visited directories every {Interval}s.",
+                    Options.SyncIntervalSeconds);
+                return new OnDemandPollingChangeSource(
                     backend,
                     TimeSpan.FromSeconds(Options.SyncIntervalSeconds),
-                    loggerFactory.CreateLogger<PollingChangeSource>());
+                    loggerFactory.CreateLogger<OnDemandPollingChangeSource>());
 
             case ChangeSourceKind.Events:
                 if (string.IsNullOrEmpty(Options.EventQueue))

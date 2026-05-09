@@ -188,6 +188,52 @@ public class OsvfsConfigFileLoaderTests
     }
 
     [Fact]
+    public void Parse_sync_mode_kebab_and_snake_aliases_accepted()
+    {
+        var kebab = OsvfsConfigFileLoader.ParseContent("sync-mode = \"on-demand\"", "test.toml");
+        var snake = OsvfsConfigFileLoader.ParseContent("sync_mode = \"full\"", "test.toml");
+
+        Assert.Equal(SyncMode.OnDemand, kebab.SyncMode);
+        Assert.Equal(SyncMode.Full, snake.SyncMode);
+    }
+
+    [Fact]
+    public void Parse_sync_mode_accepts_both_dashed_and_dashless_spellings()
+    {
+        var dashed = OsvfsConfigFileLoader.ParseContent("sync-mode = \"on-demand\"", "test.toml");
+        var dashless = OsvfsConfigFileLoader.ParseContent("sync-mode = \"ondemand\"", "test.toml");
+
+        Assert.Equal(SyncMode.OnDemand, dashed.SyncMode);
+        Assert.Equal(SyncMode.OnDemand, dashless.SyncMode);
+    }
+
+    [Fact]
+    public void Parse_sync_mode_is_case_insensitive()
+    {
+        var config = OsvfsConfigFileLoader.ParseContent("sync-mode = \"FULL\"", "test.toml");
+        Assert.Equal(SyncMode.Full, config.SyncMode);
+    }
+
+    [Fact]
+    public void Parse_unknown_sync_mode_throws()
+    {
+        var ex = Assert.Throws<OsvfsConfigException>(() =>
+            OsvfsConfigFileLoader.ParseContent("sync-mode = \"streaming\"", "test.toml"));
+        Assert.Contains("streaming", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MergeOverlay_sync_mode_overrides_user_value()
+    {
+        var user = new OsvfsConfigFile { SyncMode = SyncMode.OnDemand };
+        var project = new OsvfsConfigFile { SyncMode = SyncMode.Full };
+
+        var merged = user.MergeOverlay(project);
+
+        Assert.Equal(SyncMode.Full, merged.SyncMode);
+    }
+
+    [Fact]
     public void Parse_event_queue_kebab_and_snake_aliases_accepted()
     {
         var kebab = OsvfsConfigFileLoader.ParseContent("event-queue = \"q1\"", "test.toml");
