@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace OSVFS.ProjFs;
@@ -10,7 +11,7 @@ namespace OSVFS.ProjFs;
 /// out-of-band channel for metadata that S3 keeps next to the object body
 /// (HTTP headers, <c>x-amz-meta-*</c> user metadata).
 /// </summary>
-internal static class AdsMetadataStore
+internal static partial class AdsMetadataStore
 {
     /// <summary>
     /// ADS name suffix used for S3 user metadata (the <c>x-amz-meta-*</c>
@@ -78,6 +79,12 @@ internal static class AdsMetadataStore
 
         var streamPath = $"{filePath}:{streamName}";
 
+        // Pre-check via GetFileAttributes so a brand-new local file with no
+        // metadata stream attached doesn't raise a FileNotFoundException on every
+        // upload — the previous catch was correct but noisy under "break on
+        // first-chance exceptions".
+        if (!StreamExists(streamPath)) return null;
+
         try
         {
             using var fs = new FileStream(
@@ -116,12 +123,14 @@ internal static class AdsMetadataStore
     }
 
     /// <summary>
-    /// Best-effort removal of an ADS. ProjFS treats ADS deletion the same as a
-    /// file delete on the stream itself, so a missing stream returns
-    /// <see cref="FileNotFoundException"/> which we silence.
+    /// Best-effort removal of an ADS. The existence check up front avoids the
+    /// usual <see cref="FileNotFoundException"/> noise from <c>File.Delete</c>
+    /// when there was nothing to drop in the first place.
     /// </summary>
     private static void TryDeleteStream(string streamPath, ILogger? logger)
     {
+        if (!StreamExists(streamPath)) return;
+
         try
         {
             File.Delete(streamPath);
@@ -133,6 +142,35 @@ internal static class AdsMetadataStore
             logger?.LogDebug(ex, "Failed to delete ADS metadata stream {Stream}.", streamPath);
         }
     }
+
+    /// <summary>
+    /// Win32 sentinel returned by <c>GetFileAttributesW</c> when the path
+    /// (including any ADS suffix) does not resolve to an entry.
+    /// </summary>
+    private const uint InvalidFileAttributes = 0xFFFFFFFF;
+
+    /// <summary>
+    /// True when an entry exists at <paramref name="streamPath"/>. Works for
+    /// both ordinary file paths and the <c>file:streamName</c> form because
+    /// <c>GetFileAttributesW</c> resolves the named stream directly. Uses a
+    /// Win32 call instead of <see cref="File.Exists(string?)"/> because the
+    /// managed helper rejects paths whose colon is not in the drive position.
+    /// </summary>
+    private static bool StreamExists(string streamPath) =>
+        GetFileAttributesW(streamPath) != InvalidFileAttributes;
+
+    /// <summary>
+    /// P/Invoke wrapper for kernel32!GetFileAttributesW; returns
+    /// <see cref="InvalidFileAttributes"/> on any failure (most often
+    /// "stream not found"). Native AOT-friendly because <c>LibraryImport</c>
+    /// generates the marshalling at compile time.
+    /// </summary>
+    [LibraryImport(
+        "kernel32.dll",
+        EntryPoint = "GetFileAttributesW",
+        StringMarshalling = StringMarshalling.Utf16,
+        SetLastError = true)]
+    private static partial uint GetFileAttributesW(string lpFileName);
 
     /// <summary>
     /// UTF-8 encoder that does not emit a byte-order mark — keeps the stream

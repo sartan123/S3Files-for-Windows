@@ -1,4 +1,5 @@
 using OSVFS.ProjFs;
+using System.Runtime.ExceptionServices;
 using Xunit;
 
 namespace OSVFS.UnitTests.ProjFs;
@@ -34,6 +35,41 @@ public sealed class AdsMetadataStoreTests
         using var file = new TempFile();
 
         var result = AdsMetadataStore.TryRead(file.Path, AdsMetadataStore.UserMetaStreamName);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void TryRead_does_not_raise_first_chance_FileNotFoundException_for_missing_stream()
+    {
+        // Regression: brand-new local files (e.g., .python_history) have no
+        // metadata stream; the helper used to throw FileNotFoundException
+        // internally and rely on the catch to swallow it, which surfaced as
+        // noise under "break on first-chance exceptions". The pre-check should
+        // now bypass FileStream.Open entirely.
+        using var file = new TempFile();
+        var seen = new List<FirstChanceExceptionEventArgs>();
+        EventHandler<FirstChanceExceptionEventArgs> handler = (_, e) => seen.Add(e);
+        AppDomain.CurrentDomain.FirstChanceException += handler;
+        try
+        {
+            AdsMetadataStore.TryRead(file.Path, AdsMetadataStore.UserMetaStreamName);
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.FirstChanceException -= handler;
+        }
+
+        Assert.DoesNotContain(seen, e => e.Exception is FileNotFoundException);
+    }
+
+    [Fact]
+    public void TryRead_returns_null_when_base_file_does_not_exist()
+    {
+        var nonexistent = Path.Combine(
+            Path.GetTempPath(), "osvfs-ads-missing-" + Guid.NewGuid().ToString("N") + ".tmp");
+
+        var result = AdsMetadataStore.TryRead(nonexistent, AdsMetadataStore.UserMetaStreamName);
 
         Assert.Null(result);
     }
