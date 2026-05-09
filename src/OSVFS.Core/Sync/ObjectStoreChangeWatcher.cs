@@ -139,13 +139,30 @@ internal sealed class ObjectStoreChangeWatcher : IAsyncDisposable
     /// <summary>
     /// Records a local upload so subsequent discovered changes for the same
     /// (key, etag) are suppressed. Also forwards to the underlying source's
-    /// snapshot if it tracks one, keeping the diff baseline in sync.
+    /// snapshot if it tracks one, keeping the diff baseline in sync, and
+    /// re-binds the freshly-uploaded local file as a placeholder so ProjFS
+    /// stops treating it as DirtyData forever.
     /// </summary>
     public void RecordLocalUpload(string objectKey, string etag, long size, DateTimeOffset lastModified)
     {
         if (string.IsNullOrEmpty(objectKey)) return;
         TrackRecent(objectKey, RecentLocalMutationKind.Upserted, etag);
         sourceRecorder?.RecordLocalUpload(objectKey, etag, size, lastModified);
+
+        // A locally-created file lives in ProjFS as a "full file" until we re-bind
+        // it as a placeholder. Without this conversion, an external delete on the
+        // bucket would surface as DirtyConflict here and the local copy — which
+        // already matches what we just uploaded — would be quarantined.
+        var relativePath = KeyPath.ToRelativePath(objectKey);
+        var contentId = KeyPath.BuildContentId(etag ?? string.Empty);
+        var converted = commandSink.TryConvertFullToPlaceholder(
+            relativePath, size, lastModified, contentId);
+        if (!converted)
+        {
+            logger.LogDebug(
+                "Could not re-bind {Path} as a placeholder after local upload; later remote deletes may surface as conflicts.",
+                relativePath);
+        }
     }
 
     /// <summary>

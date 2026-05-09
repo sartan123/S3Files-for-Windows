@@ -113,6 +113,78 @@ internal sealed class VirtualizationCommandSink(
     }
 
     /// <summary>
+    /// Number of attempts <see cref="TryConvertFullToPlaceholder"/> makes when
+    /// ProjFS rejects the conversion with <see cref="HResult.AccessDenied"/>.
+    /// AV scanners and the Windows search indexer routinely grab a brief handle
+    /// against a freshly-written file; a handful of short retries clears that
+    /// contention window without busy-waiting for long.
+    /// </summary>
+    private const int ConvertToPlaceholderMaxAttempts = 5;
+
+    /// <summary>
+    /// Back-off between conversion retries. Empirically enough to clear typical
+    /// AV/indexer handles without making the upload-handler block noticeably.
+    /// </summary>
+    private static readonly TimeSpan ConvertToPlaceholderRetryDelay = TimeSpan.FromMilliseconds(50);
+
+    /// <inheritdoc/>
+    public bool TryConvertFullToPlaceholder(
+        string relativePath, long size, DateTimeOffset lastModified, byte[] contentId)
+    {
+        if (string.IsNullOrEmpty(relativePath)) return false;
+
+        var ts = lastModified == default ? DateTime.UtcNow : lastModified.UtcDateTime;
+
+        var lastHr = HResult.InternalError;
+        var lastCause = UpdateFailureCause.NoFailure;
+        for (var attempt = 0; attempt < ConvertToPlaceholderMaxAttempts; attempt++)
+        {
+            if (attempt > 0)
+            {
+                Thread.Sleep(ConvertToPlaceholderRetryDelay);
+            }
+
+            try
+            {
+                // After a successful local upload, the file on disk matches the bucket exactly,
+                // so dropping the dirty flags and re-binding it as a placeholder for the new
+                // ETag is safe: any future read just hydrates from the backend.
+                var hr = instance.UpdateFileIfNeeded(
+                    relativePath: relativePath,
+                    creationTime: ts,
+                    lastAccessTime: ts,
+                    lastWriteTime: ts,
+                    changeTime: ts,
+                    fileAttributes: FileAttributes.Normal,
+                    endOfFile: size,
+                    contentId: contentId,
+                    providerId: providerId,
+                    updateFlags: UpdateType.AllowDirtyData
+                        | UpdateType.AllowDirtyMetadata
+                        | UpdateType.AllowReadOnly,
+                    failureReason: out var cause);
+                if (hr == HResult.Ok) return true;
+
+                lastHr = hr;
+                lastCause = cause;
+
+                // Only AccessDenied is plausibly transient; other HRESULTs won't be helped by waiting.
+                if (hr != HResult.AccessDenied) break;
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "UpdateFileIfNeeded({Path}) for full→placeholder conversion threw.", relativePath);
+                return false;
+            }
+        }
+
+        logger.LogDebug(
+            "UpdateFileIfNeeded({Path}) for full→placeholder conversion returned {HResult} (cause={Cause}) after {Attempts} attempts.",
+            relativePath, lastHr, lastCause, ConvertToPlaceholderMaxAttempts);
+        return false;
+    }
+
+    /// <summary>
     /// Maps a ProjFS HRESULT plus failure-cause flags to the small outcome enum the
     /// watcher reasons about.
     /// </summary>

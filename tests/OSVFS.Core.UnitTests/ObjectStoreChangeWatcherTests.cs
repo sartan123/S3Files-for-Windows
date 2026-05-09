@@ -96,7 +96,10 @@ public sealed class ObjectStoreChangeWatcherTests
         watcher.RecordLocalUpload("local.txt", "etag-x", 12, DateTimeOffset.UtcNow);
         watcher.ApplyForTesting(Upsert("local.txt", "etag-x", 12));
 
-        Assert.Empty(sink.Calls);
+        // The placeholder-conversion call from RecordLocalUpload is the only sink interaction;
+        // the event itself is suppressed.
+        var call = Assert.Single(sink.Calls);
+        Assert.Equal("ConvertFullToPlaceholder", call.Op);
     }
 
     [Fact]
@@ -108,9 +111,27 @@ public sealed class ObjectStoreChangeWatcherTests
         watcher.RecordLocalUpload("local.txt", "etag-old", 12, DateTimeOffset.UtcNow);
         watcher.ApplyForTesting(Upsert("local.txt", "etag-new", 99));
 
+        Assert.Collection(
+            sink.Calls,
+            c => { Assert.Equal("ConvertFullToPlaceholder", c.Op); Assert.Equal(12, c.Size); },
+            c => { Assert.Equal("UpdateFile", c.Op); Assert.Equal(99, c.Size); });
+    }
+
+    [Fact]
+    public void RecordLocalUpload_converts_local_full_file_to_placeholder()
+    {
+        // After a local create + upload, the file is a "full file" in ProjFS terms.
+        // Without dehydration, ProjFS would mark it DirtyData forever and a later
+        // remote-side delete would be misclassified as a conflict and quarantined.
+        var sink = new RecordingSink();
+        var watcher = NewWatcher(new FakeChangeSource(), sink, new RecordingQuarantine());
+
+        watcher.RecordLocalUpload("docs/note.txt", "etag-1", 42, DateTimeOffset.UtcNow);
+
         var call = Assert.Single(sink.Calls);
-        Assert.Equal("UpdateFile", call.Op);
-        Assert.Equal(99, call.Size);
+        Assert.Equal("ConvertFullToPlaceholder", call.Op);
+        Assert.Equal("docs\\note.txt", call.Path);
+        Assert.Equal(42, call.Size);
     }
 
     [Fact]
@@ -301,6 +322,15 @@ public sealed class ObjectStoreChangeWatcherTests
             }
             return OverrideOnNthDelete.TryGetValue(n, out var ov) ? ov : DeleteFileResult;
         }
+
+        public bool TryConvertFullToPlaceholder(
+            string relativePath, long size, DateTimeOffset lastModified, byte[] contentId)
+        {
+            lock (gate) { Calls.Add(new SinkCall("ConvertFullToPlaceholder", relativePath, size, false)); }
+            return ConvertFullToPlaceholderResult;
+        }
+
+        public bool ConvertFullToPlaceholderResult { get; set; } = true;
     }
 
     private sealed class RecordingQuarantine : ILostAndFoundQuarantine

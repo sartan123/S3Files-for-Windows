@@ -36,4 +36,17 @@ internal interface IProjFsCommandSink
     /// overwritten (used after the local copy has been quarantined to lost+found).
     /// </summary>
     ProjFsUpdateOutcome TryDeleteFile(string relativePath, bool allowDirty);
+
+    /// <summary>
+    /// Converts a locally-created "full file" — one that was just uploaded to the
+    /// backend — into a placeholder bound to <paramref name="contentId"/>. ProjFS
+    /// otherwise keeps such a file marked DirtyData forever, so a subsequent
+    /// remote-side delete would be misread as a conflict and the local copy would
+    /// be quarantined even though it matches what we just uploaded.
+    /// </summary>
+    bool TryConvertFullToPlaceholder(
+        string relativePath,
+        long size,
+        DateTimeOffset lastModified,
+        byte[] contentId);
 }

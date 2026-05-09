@@ -197,6 +197,9 @@ public sealed class WatchSetSeederTests
 
         public ProjFsUpdateOutcome TryDeleteFile(string relativePath, bool allowDirty) =>
             ProjFsUpdateOutcome.Updated;
+
+        public bool TryConvertFullToPlaceholder(
+            string relativePath, long size, DateTimeOffset lastModified, byte[] contentId) => true;
     }
 
     private sealed class NoopQuarantine : ILostAndFoundQuarantine

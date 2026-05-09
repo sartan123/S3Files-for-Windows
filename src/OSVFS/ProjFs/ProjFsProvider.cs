@@ -360,6 +360,8 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         var objectKey = KeyPath.ToObjectKey(relativePath);
         using var _ = changeWatcher?.BeginLocalKeyChange(objectKey);
 
+        UploadResult result;
+        long uploadedBytes;
         try
         {
             using var stream = new FileStream(
@@ -370,20 +372,27 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
                 bufferSize: 81920,
                 FileOptions.SequentialScan);
 
-            var result = backend.UploadAsync(relativePath, stream, ifMatchETag: null, CancellationToken.None)
+            result = backend.UploadAsync(relativePath, stream, ifMatchETag: null, CancellationToken.None)
                 .GetAwaiter().GetResult();
-            changeWatcher?.RecordLocalUpload(objectKey, result.ETag, result.Size, result.LastModified);
-
-            logger.LogInformation("Uploaded {RelativePath} ({Size} bytes)", relativePath, stream.Length);
+            uploadedBytes = stream.Length;
         }
         catch (FileNotFoundException)
         {
             logger.LogDebug("File vanished before upload: {RelativePath}", relativePath);
+            return;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Upload failed for {RelativePath}", relativePath);
+            return;
         }
+
+        // RecordLocalUpload triggers a ProjFS UpdateFileIfNeeded to re-bind the
+        // local "full file" as a placeholder. ProjFS returns AccessDenied while
+        // any handle is open against the file, so the upload stream must be
+        // disposed first.
+        changeWatcher?.RecordLocalUpload(objectKey, result.ETag, result.Size, result.LastModified);
+        logger.LogInformation("Uploaded {RelativePath} ({Size} bytes)", relativePath, uploadedBytes);
     }
 
     /// <summary>
