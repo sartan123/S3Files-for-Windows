@@ -478,9 +478,9 @@ public sealed class S3BackendTests : IAsyncLifetime
     [Fact]
     public async Task Upload_uses_multipart_for_streams_above_threshold()
     {
-        // 12 MiB is above the 8 MiB multipart threshold and exercises the part-loop path
-        // (5 + 5 + 2 MiB across three parts).
-        const int totalSize = 12 * 1024 * 1024;
+        // 20 MiB is above the 16 MiB multipart threshold and exercises the part-loop path
+        // (5 × 4 = 4 parts at the default 5 MiB part size).
+        const int totalSize = 20 * 1024 * 1024;
         var payload = new byte[totalSize];
         for (var i = 0; i < payload.Length; i++)
         {

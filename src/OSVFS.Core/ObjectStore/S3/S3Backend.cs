@@ -21,9 +21,11 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     private const int DeleteBatchLimit = 1000;
 
     /// <summary>
-    /// Default for streams routed through TransferUtility's multipart path. Picked
-    /// to be well above the S3 5 MiB minimum part size so the multipart overhead
-    /// is worth paying. Used when the host does not pass an explicit override.
+    /// Default for streams routed through TransferUtility's multipart path.
+    /// Mirrors the AWS SDK v4 default for
+    /// <see cref="TransferUtilityConfig.MinSizeBeforePartUpload"/> (16 MB) so
+    /// the OSVFS behavior matches what an operator would expect from reading
+    /// the SDK docs. Used when the host does not pass an explicit override.
     /// </summary>
     public const long DefaultMultipartThresholdBytes = 16L * 1024 * 1024;
 

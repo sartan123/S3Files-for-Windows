@@ -181,9 +181,10 @@ both paced by the same ceiling.
 
 `osvfs` routes any upload at or above `multipart-threshold` through the
 S3 multipart path, splitting the payload into `multipart-part-size`
-chunks that `TransferUtility` uploads in parallel. The defaults (8 MiB
-threshold, 5 MiB parts) target a typical office connection, but two
-common scenarios benefit from explicit tuning:
+chunks that `TransferUtility` uploads in parallel. The defaults (16 MiB
+threshold, 5 MiB parts) match the AWS SDK v4 default for
+`MinSizeBeforePartUpload`, but two common scenarios benefit from
+explicit tuning:
 
 | Scenario | Suggested settings | Why |
 | --- | --- | --- |
@@ -549,7 +550,7 @@ prefix               = "team-a/"                 # optional
 aws-profile          = "prod"                    # optional
 bandwidth-up         = "5M"                      # optional, "0" / omit = unlimited
 bandwidth-down       = "10M"                     # optional, "0" / omit = unlimited
-multipart-threshold  = "8M"                      # optional
+multipart-threshold  = "16M"                     # optional, default 16 MiB (AWS SDK v4 default)
 multipart-part-size  = "16M"                     # optional, 5M..5G
 retry-max-attempts   = 3                         # optional, 1 disables retries
 max-concurrent-uploads   = 4                     # optional, in-flight UploadAsync calls
@@ -910,7 +911,7 @@ Roughly:
   behind the provider-neutral [`IObjectStoreBackend`](src/OSVFS.Core/ObjectStore/IObjectStoreBackend.cs)
   with the small, ProjFS-shaped surface the provider needs (list, head,
   range read, upload, delete, rename-by-copy). Uploads at or above the
-  configured `multipart-threshold` (default 8 MiB) are routed through
+  configured `multipart-threshold` (default 16 MiB) are routed through
   `TransferUtility` so large files are split into `multipart-part-size`
   chunks (default 5 MiB) and uploaded in parallel. It lives in a cross-platform Core library so
   integration tests can run against LocalStack on Linux without pulling in

@@ -95,10 +95,11 @@
 # bandwidth-down = "10M"
 
 # Stream size at or above which uploads are routed through the multipart path.
-# Same K/M/G suffixes as bandwidth-up. Defaults to "8M". Raise it on fat links
-# where a single PUT outperforms multipart's per-request overhead, lower it
-# when most files are small but you still want multipart's parallel parts.
-# multipart-threshold = "8M"
+# Same K/M/G suffixes as bandwidth-up. Defaults to "16M" (matches the AWS SDK
+# v4 default for MinSizeBeforePartUpload). Raise it on fat links where a single
+# PUT outperforms multipart's per-request overhead, lower it when most files
+# are small but you still want multipart's parallel parts.
+# multipart-threshold = "16M"
 
 # Per-part size used by multipart uploads. Must be between 5M (S3 minimum) and
 # 5G (S3 maximum); the last part may be smaller. Defaults to "5M". Pick a
