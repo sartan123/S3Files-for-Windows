@@ -200,8 +200,11 @@ public class MountOptionsBuilderTests
         var options = MountOptionsBuilder.Build(mount, store, sharedResolver, NullLogger.Instance);
 
         Assert.NotNull(options.Credentials);
-        Assert.NotNull(options.Credentials.Static);
-        Assert.Equal("AKIA", options.Credentials.Static.AccessKeyId);
+        // Options expose the provider-neutral seam; the host-side test still has
+        // to cast back to AwsCredentialSource to inspect AWS-specific shape.
+        var aws = Assert.IsType<AwsCredentialSource>(options.Credentials);
+        Assert.NotNull(aws.Static);
+        Assert.Equal("AKIA", aws.Static.AccessKeyId);
         Assert.Contains("OSVFS profile 'prod'", options.Credentials.Description);
         Assert.Equal(0, sharedResolver.Calls);
     }
@@ -227,7 +230,8 @@ public class MountOptionsBuilderTests
             mount, new FakeCredentialStore(), sharedResolver, NullLogger.Instance);
 
         Assert.NotNull(options.Credentials);
-        Assert.Same(sdkCredentials, options.Credentials.Sdk);
+        var aws = Assert.IsType<AwsCredentialSource>(options.Credentials);
+        Assert.Same(sdkCredentials, aws.Sdk);
         Assert.Contains("credential_process", options.Credentials.Description);
         Assert.Equal(1, sharedResolver.Calls);
         Assert.Equal("osvfs-login", sharedResolver.LastProfileName);

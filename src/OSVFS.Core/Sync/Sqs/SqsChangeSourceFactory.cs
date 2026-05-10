@@ -22,7 +22,14 @@ internal static class SqsChangeSourceFactory
     /// <param name="keyPrefix">Optional linked key prefix (slash-terminated or empty).</param>
     /// <param name="endpointUrl">Optional SQS endpoint override (LocalStack, custom proxy).</param>
     /// <param name="region">Optional AWS region; falls back to the SDK chain when null.</param>
-    /// <param name="credentials">Optional credential source (OSVFS DPAPI static or SDK-resolved); null falls back to the SDK chain.</param>
+    /// <param name="credentials">
+    /// Optional credential source carried as the provider-neutral seam. The
+    /// SQS factory is S3 / EventBridge specific, so it accepts only
+    /// <see cref="AwsCredentialSource"/>; any other concrete shape (the host
+    /// wiring a GCS / Azure source by mistake) is treated as a wiring bug
+    /// and triggers <see cref="InvalidOperationException"/>. Null falls back
+    /// to the SDK chain.
+    /// </param>
     /// <param name="logger">Logger passed to the source for receive errors and parse warnings.</param>
     public static SqsChangeSource Create(
         string queueUrlOrName,
@@ -30,10 +37,11 @@ internal static class SqsChangeSourceFactory
         string? keyPrefix,
         string? endpointUrl,
         string? region,
-        AwsCredentialSource? credentials,
+        IObjectStoreCredentialSource? credentials,
         ILogger<SqsChangeSource> logger)
     {
-        var client = CreateClient(endpointUrl, region, credentials);
+        var awsCredentials = NarrowToAws(credentials);
+        var client = CreateClient(endpointUrl, region, awsCredentials);
         return new SqsChangeSource(
             client,
             ownsClient: true,
@@ -41,6 +49,19 @@ internal static class SqsChangeSourceFactory
             bucketName,
             keyPrefix,
             logger);
+    }
+
+    /// <summary>
+    /// Narrows the generic credential seam to the AWS shape this factory
+    /// requires. Null passes through; any non-AWS concrete type fails fast.
+    /// </summary>
+    private static AwsCredentialSource? NarrowToAws(IObjectStoreCredentialSource? credentials)
+    {
+        if (credentials is null) return null;
+        if (credentials is AwsCredentialSource aws) return aws;
+        throw new InvalidOperationException(
+            $"SqsChangeSourceFactory requires credentials of type {nameof(AwsCredentialSource)}, " +
+            $"got {credentials.GetType().Name}.");
     }
 
     /// <summary>

@@ -79,11 +79,15 @@ internal sealed record ProjFsProviderOptions
     public string? EventQueue { get; init; }
 
     /// <summary>
-    /// Optional credential source — either OSVFS DPAPI-stored static credentials or
-    /// an SDK-resolved refreshing wrapper (shared profile, credential_process, SSO).
-    /// Null falls back to the SDK's default credential chain.
+    /// Optional credential source carried from the mount config to the
+    /// active backend. Provider-specific (<see cref="AwsCredentialSource"/>
+    /// for S3 today; <c>GcsCredentialSource</c> / <c>AzureCredentialSource</c>
+    /// once those backends land), but the host treats it as the opaque
+    /// <see cref="IObjectStoreCredentialSource"/> seam so it can stay
+    /// provider-agnostic at compile time. Null falls back to whatever default
+    /// chain the active backend uses (e.g. the AWS SDK's chain for S3).
     /// </summary>
-    public AwsCredentialSource? Credentials { get; init; }
+    public IObjectStoreCredentialSource? Credentials { get; init; }
 
     /// <summary>
     /// Optional per-direction bandwidth ceilings. Each component null means

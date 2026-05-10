@@ -35,7 +35,7 @@ internal static class ObjectStoreBackendFactory
         string? endpointUrl = null,
         string? keyPrefix = null,
         string? region = null,
-        AwsCredentialSource? credentials = null,
+        IObjectStoreCredentialSource? credentials = null,
         BandwidthLimits? bandwidth = null,
         long? multipartThresholdBytes = null,
         long? multipartPartSizeBytes = null,
@@ -50,7 +50,9 @@ internal static class ObjectStoreBackendFactory
         return provider switch
         {
             ObjectStoreProvider.S3 => new S3.S3Backend(
-                bucket, endpointUrl, keyPrefix, region, credentials, upLimiter, downLimiter,
+                bucket, endpointUrl, keyPrefix, region,
+                CastCredentials<AwsCredentialSource>(credentials, provider),
+                upLimiter, downLimiter,
                 multipartThresholdBytes, multipartPartSizeBytes, retryMaxAttempts,
                 maxConcurrentUploads, maxConcurrentDownloads, maxMultipartParts, refreshNotifier),
             ObjectStoreProvider.Gcs => DisposeAndThrow(upLimiter, downLimiter, new NotSupportedException(
@@ -70,6 +72,26 @@ internal static class ObjectStoreBackendFactory
     /// </summary>
     private static TokenBucketRateLimiter? CreateLimiter(long? bytesPerSecond) =>
         bytesPerSecond is > 0 ? new TokenBucketRateLimiter(bytesPerSecond.Value) : null;
+
+    /// <summary>
+    /// Narrows a generic <see cref="IObjectStoreCredentialSource"/> down to the
+    /// concrete type the active backend expects. Returns null when the host
+    /// did not supply credentials (the backend then falls back to the SDK
+    /// default chain). Throws <see cref="InvalidOperationException"/> when the
+    /// supplied credentials carry the wrong shape — that is a host/config
+    /// wiring bug (e.g. GCS credentials handed to an S3 mount) and must
+    /// surface immediately rather than cause an opaque failure later.
+    /// </summary>
+    private static T? CastCredentials<T>(
+        IObjectStoreCredentialSource? credentials, ObjectStoreProvider provider)
+        where T : class, IObjectStoreCredentialSource
+    {
+        if (credentials is null) return null;
+        if (credentials is T typed) return typed;
+        throw new InvalidOperationException(
+            $"Provider '{provider}' requires credentials of type {typeof(T).Name}, " +
+            $"got {credentials.GetType().Name}.");
+    }
 
     /// <summary>
     /// Helper used in the unsupported-provider switch arms to dispose any

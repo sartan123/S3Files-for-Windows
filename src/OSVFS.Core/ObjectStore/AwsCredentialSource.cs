@@ -10,7 +10,7 @@ namespace OSVFS.ObjectStore;
 /// the SDK credential object to feed into <see cref="AmazonServiceClient"/>s,
 /// regardless of which side of the union supplied it.
 /// </summary>
-internal sealed class AwsCredentialSource
+internal sealed class AwsCredentialSource : IObjectStoreCredentialSource
 {
     /// <summary>
     /// Static AWS credentials originating from the OSVFS DPAPI store, when this
