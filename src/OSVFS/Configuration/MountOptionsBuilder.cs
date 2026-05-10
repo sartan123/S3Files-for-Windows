@@ -26,6 +26,17 @@ internal static class MountOptionsBuilder
     public static ProjFsProviderOptions Build(
         OsvfsMountConfig mount,
         IAwsCredentialStore credentialStore,
+        ILogger logger) =>
+        Build(mount, credentialStore, DefaultSharedProfileResolver.Instance, logger);
+
+    /// <summary>
+    /// Test-friendly overload that lets callers swap out the SDK shared-profile
+    /// lookup. Production code uses <see cref="DefaultSharedProfileResolver"/>.
+    /// </summary>
+    internal static ProjFsProviderOptions Build(
+        OsvfsMountConfig mount,
+        IAwsCredentialStore credentialStore,
+        ISharedProfileResolver sharedProfileResolver,
         ILogger logger)
     {
         if (string.IsNullOrEmpty(mount.Bucket))
@@ -42,7 +53,8 @@ internal static class MountOptionsBuilder
                 "[[mount]] table.");
         }
 
-        var credentials = ResolveCredential(credentialStore, mount.AwsProfile, mount.Name, logger);
+        var credentials = ResolveCredential(
+            credentialStore, sharedProfileResolver, mount.AwsProfile, mount.Name, logger);
 
         BandwidthLimits bandwidthLimits;
         long? multipartThresholdBytes;
@@ -106,21 +118,47 @@ internal static class MountOptionsBuilder
     }
 
     /// <summary>
-    /// Resolves an <c>aws-profile</c> name against the credential store. The
-    /// resolution failure is rewrapped as <see cref="OsvfsConfigException"/>
-    /// with the mount name in the message so multi-mount runs surface which
-    /// entry blew up.
+    /// Resolves an <c>aws-profile</c> name in two steps:
+    /// 1. The OSVFS DPAPI store (encrypted static credentials managed by
+    ///    <c>osvfs credentials set</c>).
+    /// 2. The shared AWS profile store via <paramref name="sharedProfileResolver"/>
+    ///    (covers static keys in <c>~/.aws/credentials</c>, <c>credential_process</c>
+    ///    profiles produced by <c>aws login</c>, <c>sso_session</c> /
+    ///    <c>login_session</c> profiles, and assume-role chains).
+    /// Both misses are reported as a single <see cref="OsvfsConfigException"/> so
+    /// multi-mount runs surface which entry blew up.
     /// </summary>
-    private static AwsCredential? ResolveCredential(
-        IAwsCredentialStore store, string? profileName, string mountName, ILogger logger)
+    private static AwsCredentialSource? ResolveCredential(
+        IAwsCredentialStore store,
+        ISharedProfileResolver sharedProfileResolver,
+        string? profileName,
+        string mountName,
+        ILogger logger)
     {
         if (string.IsNullOrEmpty(profileName)) return null;
-        var credential = store.Load(profileName)
-            ?? throw new OsvfsConfigException(
-                $"Mount '{mountName}': AWS profile '{profileName}' was not found in the OSVFS " +
-                "credential store. Run 'osvfs credentials set --profile <name>' to create it.");
-        logger.LogInformation(
-            "Mount '{Mount}': using AWS credentials from profile '{Profile}'.", mountName, profileName);
-        return credential;
+
+        var stored = store.Load(profileName);
+        if (stored is not null)
+        {
+            var description = $"OSVFS profile '{profileName}'";
+            logger.LogInformation(
+                "Mount '{Mount}': using AWS credentials from {Source}.", mountName, description);
+            return AwsCredentialSource.FromStatic(stored, description);
+        }
+
+        var shared = sharedProfileResolver.Resolve(profileName);
+        if (shared is not null)
+        {
+            logger.LogInformation(
+                "Mount '{Mount}': using AWS credentials from {Source}.", mountName, shared.Description);
+            return AwsCredentialSource.FromSdk(shared.Credentials, shared.Description);
+        }
+
+        throw new OsvfsConfigException(
+            $"Mount '{mountName}': AWS profile '{profileName}' was not found in the OSVFS " +
+            "credential store or in the shared AWS profile store (~/.aws/config, " +
+            "~/.aws/credentials). Run 'osvfs credentials set --profile <name>' to create an " +
+            "OSVFS-managed entry, or configure the profile in the shared AWS files (e.g. via " +
+            "'aws login --profile <name>' for AWS CLI 2.32+).");
     }
 }

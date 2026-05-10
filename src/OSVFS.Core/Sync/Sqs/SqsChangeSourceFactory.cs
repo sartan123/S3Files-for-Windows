@@ -22,7 +22,7 @@ internal static class SqsChangeSourceFactory
     /// <param name="keyPrefix">Optional linked key prefix (slash-terminated or empty).</param>
     /// <param name="endpointUrl">Optional SQS endpoint override (LocalStack, custom proxy).</param>
     /// <param name="region">Optional AWS region; falls back to the SDK chain when null.</param>
-    /// <param name="credentials">Optional static credentials; null falls back to the SDK chain.</param>
+    /// <param name="credentials">Optional credential source (OSVFS DPAPI static or SDK-resolved); null falls back to the SDK chain.</param>
     /// <param name="logger">Logger passed to the source for receive errors and parse warnings.</param>
     public static SqsChangeSource Create(
         string queueUrlOrName,
@@ -30,7 +30,7 @@ internal static class SqsChangeSourceFactory
         string? keyPrefix,
         string? endpointUrl,
         string? region,
-        AwsCredential? credentials,
+        AwsCredentialSource? credentials,
         ILogger<SqsChangeSource> logger)
     {
         var client = CreateClient(endpointUrl, region, credentials);
@@ -48,7 +48,7 @@ internal static class SqsChangeSourceFactory
     /// conventions used by the S3 backend.
     /// </summary>
     private static AmazonSQSClient CreateClient(
-        string? endpointUrl, string? region, AwsCredential? credentials)
+        string? endpointUrl, string? region, AwsCredentialSource? credentials)
     {
         var config = new AmazonSQSConfig();
         if (!string.IsNullOrEmpty(endpointUrl))
@@ -66,9 +66,6 @@ internal static class SqsChangeSourceFactory
         {
             return new AmazonSQSClient(config);
         }
-        var awsCredentials = string.IsNullOrEmpty(credentials.SessionToken)
-            ? (AWSCredentials)new BasicAWSCredentials(credentials.AccessKeyId, credentials.SecretAccessKey)
-            : new SessionAWSCredentials(credentials.AccessKeyId, credentials.SecretAccessKey, credentials.SessionToken);
-        return new AmazonSQSClient(awsCredentials, config);
+        return new AmazonSQSClient(credentials.Materialize(), config);
     }
 }

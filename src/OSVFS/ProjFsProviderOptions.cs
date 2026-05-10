@@ -79,10 +79,11 @@ internal sealed record ProjFsProviderOptions
     public string? EventQueue { get; init; }
 
     /// <summary>
-    /// Optional static credentials resolved from the OSVFS credential store; null falls
-    /// back to the SDK's default credential chain.
+    /// Optional credential source — either OSVFS DPAPI-stored static credentials or
+    /// an SDK-resolved refreshing wrapper (shared profile, credential_process, SSO).
+    /// Null falls back to the SDK's default credential chain.
     /// </summary>
-    public AwsCredential? Credentials { get; init; }
+    public AwsCredentialSource? Credentials { get; init; }
 
     /// <summary>
     /// Optional per-direction bandwidth ceilings. Each component null means

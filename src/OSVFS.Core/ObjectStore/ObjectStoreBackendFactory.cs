@@ -20,7 +20,7 @@ internal static class ObjectStoreBackendFactory
     /// <param name="endpointUrl">Optional endpoint override (mainly for S3-compatible servers).</param>
     /// <param name="keyPrefix">Optional key prefix; only objects beneath it are projected.</param>
     /// <param name="region">Optional region / location.</param>
-    /// <param name="credentials">Optional static credentials; when null the SDK's default chain is used.</param>
+    /// <param name="credentials">Optional credential source (OSVFS DPAPI static or SDK-resolved); when null the SDK's default chain is used.</param>
     /// <param name="bandwidth">Optional per-direction transfer ceilings.</param>
     /// <param name="multipartThresholdBytes">Override for the multipart upload threshold; null uses the backend default.</param>
     /// <param name="multipartPartSizeBytes">Override for the multipart upload part size; null uses the backend default.</param>
@@ -31,7 +31,7 @@ internal static class ObjectStoreBackendFactory
         string? endpointUrl = null,
         string? keyPrefix = null,
         string? region = null,
-        AwsCredential? credentials = null,
+        AwsCredentialSource? credentials = null,
         BandwidthLimits? bandwidth = null,
         long? multipartThresholdBytes = null,
         long? multipartPartSizeBytes = null,

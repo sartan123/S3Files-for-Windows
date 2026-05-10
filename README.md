@@ -664,6 +664,50 @@ a real environment, install the published binary and run:
 .\publish\win-x64\osvfs.exe doctor --bucket <your-bucket> --region <bucket-region> --profile sso-test
 ```
 
+#### Sign in via `aws login` (AWS CLI 2.32+)
+
+For environments **not** using IAM Identity Center, AWS CLI v2.32.0 introduced
+`aws login` — an OAuth 2.0 + PKCE flow that converts your AWS Management Console
+sign-in into auto-refreshing temporary credentials (up to 12 hours). The OAuth
+client and endpoints are reserved for the AWS CLI itself, so OSVFS integrates by
+**referencing the resulting `~/.aws/config` profile through the SDK
+shared-profile chain** (the AWS-recommended `credential_process` pattern).
+
+1. **Install AWS CLI v2.32.0 or later** and attach the
+   [`SignInLocalDevelopmentAccess`](https://docs.aws.amazon.com/signin/latest/userguide/security-iam-awsmanpol.html)
+   managed policy to your IAM principal.
+2. **Sign in** with the CLI; this writes a `login_session` profile and caches
+   the refresh token under `%USERPROFILE%\.aws\login\cache`:
+   ```powershell
+   aws login --profile signin
+   ```
+3. **Wire it into `~/.aws/config`** as a `credential_process` profile so any
+   AWS SDK can consume it (newer SDKs may eventually support `login_session`
+   natively, but `credential_process` works today):
+   ```ini
+   [profile signin]
+   login_session = arn:aws:iam::123456789012:user/you
+   region = us-east-1
+
+   [profile osvfs-login]
+   credential_process = aws configure export-credentials --profile signin --format process
+   region = us-east-1
+   ```
+4. **Reference it from `osvfs.toml`** like any other profile — when the name is
+   absent from the OSVFS DPAPI store, OSVFS falls back to the SDK shared-profile
+   chain and picks up the `credential_process` entry:
+   ```toml
+   provider    = "s3"
+   bucket      = "my-bucket"
+   root-folder = "C:/Users/you/OSVFS"
+   aws-profile = "osvfs-login"
+   ```
+
+`osvfs doctor --profile osvfs-login` reports the resolution path so you can
+confirm the credentials came from the shared file (e.g.
+`shared profile 'osvfs-login' (credential_process)`) rather than the SDK
+default chain.
+
 ## Troubleshooting
 
 When a mount refuses to start — `StartVirtualizing failed`, "bucket not

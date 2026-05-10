@@ -94,7 +94,7 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
         string? endpointUrl = null,
         string? keyPrefix = null,
         string? region = null,
-        AwsCredential? credentials = null,
+        AwsCredentialSource? credentials = null,
         IRateLimiter? upLimiter = null,
         IRateLimiter? downLimiter = null,
         long? multipartThresholdBytes = null,
@@ -712,7 +712,7 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     private static AmazonS3Client CreateClient(
         string? endpointUrl,
         string? region,
-        AwsCredential? credentials,
+        AwsCredentialSource? credentials,
         int retryMaxAttempts)
     {
         var config = new AmazonS3Config
@@ -748,11 +748,9 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
         {
             return new AmazonS3Client(config);
         }
-        // Static credentials short-circuit the SDK's default chain (env vars, profile,
-        // IMDS). Session token presence picks the temporary-credentials variant.
-        var awsCredentials = string.IsNullOrEmpty(credentials.SessionToken)
-            ? (AWSCredentials)new BasicAWSCredentials(credentials.AccessKeyId, credentials.SecretAccessKey)
-            : new SessionAWSCredentials(credentials.AccessKeyId, credentials.SecretAccessKey, credentials.SessionToken);
-        return new AmazonS3Client(awsCredentials, config);
+        // Materialize once: the static branch builds a fresh BasicAWS/SessionAWS pair,
+        // the SDK branch returns the refreshing wrapper supplied by the caller (e.g. a
+        // ProcessAWSCredentials around `aws configure export-credentials`).
+        return new AmazonS3Client(credentials.Materialize(), config);
     }
 }

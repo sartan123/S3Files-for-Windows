@@ -1,3 +1,4 @@
+using Amazon.Runtime;
 using Microsoft.Extensions.Logging.Abstractions;
 using OSVFS.Configuration;
 using OSVFS.ObjectStore;
@@ -124,15 +125,46 @@ public class MountOptionsBuilderTests
         };
         var store = new FakeCredentialStore();
         store.Save("prod", new AwsCredential { AccessKeyId = "AKIA", SecretAccessKey = "secret" });
+        var sharedResolver = new FakeSharedProfileResolver();
 
-        var options = MountOptionsBuilder.Build(mount, store, NullLogger.Instance);
+        var options = MountOptionsBuilder.Build(mount, store, sharedResolver, NullLogger.Instance);
 
         Assert.NotNull(options.Credentials);
-        Assert.Equal("AKIA", options.Credentials.AccessKeyId);
+        Assert.NotNull(options.Credentials.Static);
+        Assert.Equal("AKIA", options.Credentials.Static.AccessKeyId);
+        Assert.Contains("OSVFS profile 'prod'", options.Credentials.Description);
+        Assert.Equal(0, sharedResolver.Calls);
     }
 
     [Fact]
-    public void Build_throws_when_aws_profile_missing_in_store()
+    public void Build_falls_back_to_shared_profile_when_dpapi_store_misses()
+    {
+        var mount = new OsvfsMountConfig
+        {
+            Name = "alpha",
+            Bucket = "alpha-bucket",
+            RootFolder = @"C:\mounts\alpha",
+            AwsProfile = "osvfs-login",
+        };
+        var sdkCredentials = new BasicAWSCredentials("ASIASHARED", "shared-secret");
+        var sharedResolver = new FakeSharedProfileResolver
+        {
+            Result = new SharedProfileResolution(
+                sdkCredentials, "shared profile 'osvfs-login' (credential_process)"),
+        };
+
+        var options = MountOptionsBuilder.Build(
+            mount, new FakeCredentialStore(), sharedResolver, NullLogger.Instance);
+
+        Assert.NotNull(options.Credentials);
+        Assert.Same(sdkCredentials, options.Credentials.Sdk);
+        Assert.Contains("credential_process", options.Credentials.Description);
+        Assert.Equal(1, sharedResolver.Calls);
+        Assert.Equal("osvfs-login", sharedResolver.LastProfileName);
+    }
+
+    [Fact]
+    public void Build_throws_when_aws_profile_missing_in_both_stores()
     {
         var mount = new OsvfsMountConfig
         {
@@ -143,8 +175,10 @@ public class MountOptionsBuilderTests
         };
 
         var ex = Assert.Throws<OsvfsConfigException>(() =>
-            MountOptionsBuilder.Build(mount, new FakeCredentialStore(), NullLogger.Instance));
+            MountOptionsBuilder.Build(
+                mount, new FakeCredentialStore(), new FakeSharedProfileResolver(), NullLogger.Instance));
         Assert.Contains("absent", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("aws login", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

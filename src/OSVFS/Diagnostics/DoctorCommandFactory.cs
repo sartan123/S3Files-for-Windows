@@ -159,7 +159,16 @@ internal static class DoctorCommandFactory
     /// converted into a check failure inside <see cref="AwsCredentialsCheck"/>.
     /// </summary>
     private static (AWSCredentials Credentials, string Source) ResolveCredentials(
-        IAwsCredentialStore store, string? profileName)
+        IAwsCredentialStore store, string? profileName) =>
+        ResolveCredentials(store, DefaultSharedProfileResolver.Instance, profileName);
+
+    /// <summary>
+    /// Test-friendly resolver overload that mirrors the production resolution chain
+    /// (OSVFS DPAPI store → shared SDK profile via <paramref name="sharedProfileResolver"/>
+    /// → SDK default credential chain) used by <see cref="MountOptionsBuilder"/>.
+    /// </summary>
+    internal static (AWSCredentials Credentials, string Source) ResolveCredentials(
+        IAwsCredentialStore store, ISharedProfileResolver sharedProfileResolver, string? profileName)
     {
         if (!string.IsNullOrEmpty(profileName))
         {
@@ -171,9 +180,15 @@ internal static class DoctorCommandFactory
                     : new SessionAWSCredentials(stored.AccessKeyId, stored.SecretAccessKey, stored.SessionToken);
                 return (creds, $"OSVFS profile '{profileName}'");
             }
-            // Fall through: the requested profile does not exist in the OSVFS store.
-            // The credentials check will report the SDK chain instead and the
-            // operator will see both the attempted profile and the actual fallback.
+
+            var shared = sharedProfileResolver.Resolve(profileName);
+            if (shared is not null)
+            {
+                return (shared.Credentials, shared.Description);
+            }
+            // Fall through: the named profile is unknown to both stores. Report the
+            // SDK default chain so the operator sees what the bucket-side checks
+            // will actually use, alongside the attempted profile name.
         }
         // DefaultAWSCredentialsIdentityResolver replaces FallbackCredentialsFactory in
         // AWSSDK v4 — it walks the same chain (env vars → profile → IMDS) and returns
