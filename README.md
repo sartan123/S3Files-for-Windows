@@ -244,6 +244,28 @@ max-multipart-parts       = 10
 All three values must be ≥ 1; OSVFS rejects zero or negative values at
 startup.
 
+### HTTP transport tuning
+
+OSVFS hands the AWS SDK a custom `HttpClientFactory` so the underlying
+`SocketsHttpHandler` is pinned to operationally-safe defaults instead of
+the framework's "infinite lifetime, unbounded pool" defaults. The factory
+is built once per backend and shared with the SDK for the lifetime of the
+mount, so a single `AmazonS3Client` can sustain long-lived high-throughput
+sessions without leaking sockets or pinning a stale DNS answer.
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `PooledConnectionLifetime` | `5 min` | Caps how long a pooled TCP connection lives so DNS changes (S3 endpoint rotation, VPC endpoint failover) are picked up without restarting the process. |
+| `PooledConnectionIdleTimeout` | `2 min` | Closes connections that have been idle past this window so the host releases sockets promptly when a burst of traffic ends. |
+| `MaxConnectionsPerServer` | `max(uploads, downloads) × 2` | Same value as the SDK's `AmazonS3Config.MaxConnectionsPerServer`; sized off the configured concurrency so the per-direction gates remain the binding constraint, not connection exhaustion. |
+| `EnableMultipleHttp2Connections` | `true` | Lets the pool open additional HTTP/2 connections when a single one runs out of `SETTINGS_MAX_CONCURRENT_STREAMS`. |
+| HTTP/2 promotion | enabled for AWS endpoints | Outbound requests are issued with `HttpVersion.Version20` and `RequestVersionOrLower` policy, so endpoints that only speak HTTP/1.1 (LocalStack, MinIO) negotiate down transparently. Disabled when `endpoint-url` is set. |
+
+These knobs are not surfaced in `osvfs.toml` — the values above are
+appropriate for every supported deployment and have no operational reason
+to be tuned per mount. Override them in code if you fork the project for
+a non-AWS object store with materially different connection semantics.
+
 ### Retry policy
 
 Transient object-store failures are retried by the AWS SDK pipeline. OSVFS

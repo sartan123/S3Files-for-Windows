@@ -64,6 +64,14 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     private readonly TransferUtility transferUtility;
 
     /// <summary>
+    /// Shared HTTP client factory that owns the tuned
+    /// <see cref="System.Net.Http.SocketsHttpHandler"/> threaded into the SDK.
+    /// Disposed when the backend is disposed so its <c>HttpClient</c> tears
+    /// down with the rest of the backend.
+    /// </summary>
+    private readonly OsvfsHttpClientFactory httpClientFactory;
+
+    /// <summary>
     /// Optional throttle applied to upload payload streams. Owned by the backend.
     /// </summary>
     private readonly IRateLimiter? upLimiter;
@@ -236,7 +244,15 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
         // the SDK's own bookkeeping requests (HEAD before PUT, list pages
         // during reconcile, …) that don't go through the upload/download gates.
         var maxConnections = Math.Max(this.maxConcurrentUploads, this.maxConcurrentDownloads) * 2;
-        client = CreateClient(endpointUrl, region, awsCredentials, attempts, maxConnections);
+        // Build the factory before the client so the SDK picks it up via
+        // AmazonS3Config.HttpClientFactory. Endpoint overrides
+        // (LocalStack / MinIO) get HTTP/2 promotion disabled because those
+        // servers commonly speak only HTTP/1.1 and the negotiation overhead
+        // is wasted there.
+        httpClientFactory = new OsvfsHttpClientFactory(
+            maxConnectionsPerServer: maxConnections,
+            enableHttp2: string.IsNullOrEmpty(endpointUrl));
+        client = CreateClient(endpointUrl, region, awsCredentials, attempts, maxConnections, httpClientFactory);
         // Share a single TransferUtility per backend: it's documented thread-safe, holds no
         // upload-specific state, and disposes only its internally-created client (not ours).
         // ConcurrentServiceRequests caps the parts uploaded in parallel within a single
@@ -257,6 +273,9 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
     {
         transferUtility.Dispose();
         client.Dispose();
+        // Dispose the factory after the SDK client so any in-flight SDK
+        // teardown that touches the HttpClient sees a live instance.
+        httpClientFactory.Dispose();
         (upLimiter as IDisposable)?.Dispose();
         (downLimiter as IDisposable)?.Dispose();
         uploadGate.Dispose();
@@ -895,7 +914,8 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
         string? region,
         AWSCredentials? credentials,
         int retryMaxAttempts,
-        int maxConnectionsPerServer)
+        int maxConnectionsPerServer,
+        OsvfsHttpClientFactory httpClientFactory)
     {
         var config = new AmazonS3Config
         {
@@ -910,8 +930,14 @@ internal sealed class S3Backend : IObjectStoreBackend, IDisposable
             MaxErrorRetry = Math.Max(0, retryMaxAttempts - 1),
             // Cap the SDK's per-host HTTP connection pool. Sized off the
             // configured upload/download ceilings so the gates are the binding
-            // constraint, not connection exhaustion.
+            // constraint, not connection exhaustion. The same value is also
+            // baked into the SocketsHttpHandler the factory hands out.
             MaxConnectionsPerServer = maxConnectionsPerServer,
+            // Route HttpClient creation through the OSVFS factory so the SDK
+            // picks up the tuned SocketsHttpHandler (Keep-Alive lifetime,
+            // pooled-idle timeout, multiple-HTTP/2 connections) rather than
+            // the SDK's default handler.
+            HttpClientFactory = httpClientFactory,
         };
         if (!string.IsNullOrEmpty(endpointUrl))
         {

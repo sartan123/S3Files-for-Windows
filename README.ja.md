@@ -252,6 +252,29 @@ max-multipart-parts       = 10
 3 つのキーはいずれも 1 以上である必要があります。0 や負の値が指定された
 場合 OSVFS は起動時に拒否します。
 
+### HTTP トランスポートのチューニング
+
+OSVFS は AWS SDK に独自の `HttpClientFactory` を渡し、内部の
+`SocketsHttpHandler` を「コネクション無期限保持・プール上限なし」と
+いうフレームワーク既定値ではなく、運用上安全な値に明示固定します。
+ファクトリはバックエンドごとに 1 つだけ生成され、マウントの寿命と同じ
+だけ SDK と共有されるため、単一の `AmazonS3Client` でソケットリークや
+DNS の固定化を起こさずに長時間の高スループット通信を継続できます。
+
+| 設定 | 値 | 目的 |
+| --- | --- | --- |
+| `PooledConnectionLifetime` | `5 分` | プールされた TCP コネクションの寿命を制限し、DNS 変更 (S3 エンドポイントのローテーション、VPC エンドポイントのフェイルオーバーなど) をプロセス再起動なしで反映できるようにします |
+| `PooledConnectionIdleTimeout` | `2 分` | 一定時間アイドルだったコネクションを閉じ、バーストが収まった後にホストが速やかにソケットを解放できるようにします |
+| `MaxConnectionsPerServer` | `max(uploads, downloads) × 2` | SDK の `AmazonS3Config.MaxConnectionsPerServer` と同じ値。並列度設定から導出しているため、束縛要因はあくまでも方向別ゲートであり、コネクション枯渇ではないことを保証します |
+| `EnableMultipleHttp2Connections` | `true` | 単一の HTTP/2 接続が `SETTINGS_MAX_CONCURRENT_STREAMS` を使い切った際に、追加の接続をプールが開けるようにします |
+| HTTP/2 への昇格 | AWS エンドポイントで有効 | 送出リクエストを `HttpVersion.Version20` + `RequestVersionOrLower` ポリシーで発行するため、HTTP/1.1 しか話さないエンドポイント (LocalStack、MinIO) は透過的に HTTP/1.1 へネゴシエーションダウンします。`endpoint-url` が設定されている場合は無効です |
+
+これらの値は `osvfs.toml` から変更できません。サポート対象のすべての
+構成で適切な値であり、マウント単位でチューニングする運用上の理由が
+存在しないためです。AWS 以外でコネクションのセマンティクスが大きく
+異なるオブジェクトストアに対してフォークする場合のみ、コードを直接
+書き換えてください。
+
 ### リトライポリシー
 
 オブジェクトストアの一時的な失敗は AWS SDK のリトライパイプラインに委
