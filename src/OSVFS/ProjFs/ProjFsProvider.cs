@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Windows.ProjFS;
 using OSVFS.Configuration;
+using OSVFS.Diagnostics;
 using OSVFS.ObjectStore;
 using OSVFS.Sync;
 using OSVFS.Sync.ProjFs;
@@ -211,6 +212,8 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         uint triggeringProcessId,
         string triggeringProcessImageFileName)
     {
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.StartDirectoryEnumeration");
+        scope.SetTag("relative.path", relativePath);
         try
         {
             // Register the visited directory before listing so a concurrent reconcile
@@ -225,6 +228,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
         catch (Exception ex)
         {
+            scope.Fail(ex);
             logger.LogError(ex, "StartDirectoryEnumeration({RelativePath})", relativePath);
             return HResult.InternalError;
         }
@@ -285,11 +289,14 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         uint triggeringProcessId,
         string triggeringProcessImageFileName)
     {
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.GetPlaceholderInfo");
+        scope.SetTag("relative.path", relativePath);
         try
         {
             var info = backend.HeadAsync(relativePath, CancellationToken.None).GetAwaiter().GetResult();
             if (info is null)
             {
+                scope.SetTag("projfs.result", "not_found");
                 return HResult.FileNotFound;
             }
 
@@ -322,6 +329,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
         catch (Exception ex)
         {
+            scope.Fail(ex);
             logger.LogError(ex, "GetPlaceholderInfo({RelativePath})", relativePath);
             return HResult.InternalError;
         }
@@ -342,6 +350,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         uint triggeringProcessId,
         string triggeringProcessImageFileName)
     {
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.GetFileData");
+        scope.SetTag("relative.path", relativePath);
+        scope.SetTag("byte.offset", (long)byteOffset);
+        scope.SetTag("byte.length", (long)length);
         try
         {
             using var buffer = virtualizationInstance.CreateWriteBuffer(length);
@@ -352,6 +364,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
         catch (Exception ex)
         {
+            scope.Fail(ex);
             logger.LogError(ex, "GetFileData({RelativePath})", relativePath);
             return HResult.InternalError;
         }
@@ -365,6 +378,9 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     {
         if (Options.ReadOnly || isDirectory || string.IsNullOrEmpty(relativePath)) return;
         if (IsInLostAndFound(relativePath)) return;
+
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.HandleFileModified");
+        scope.SetTag("relative.path", relativePath);
 
         var fullPath = Path.Combine(syncRootPath, relativePath);
         if (!File.Exists(fullPath))
@@ -428,6 +444,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
         catch (Exception ex)
         {
+            scope.Fail(ex);
             logger.LogError(ex, "Upload failed for {RelativePath}", relativePath);
             return;
         }
@@ -448,6 +465,10 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
     {
         if (Options.ReadOnly || string.IsNullOrEmpty(relativePath)) return;
         if (IsInLostAndFound(relativePath)) return;
+
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.HandleFileDeleted");
+        scope.SetTag("relative.path", relativePath);
+        scope.SetTag("is.directory", isDirectory);
 
         var objectKey = KeyPath.ToObjectKey(relativePath);
 
@@ -472,6 +493,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
         catch (Exception ex)
         {
+            scope.Fail(ex);
             logger.LogError(ex, "Delete failed for {RelativePath}", relativePath);
         }
     }
@@ -485,6 +507,11 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         if (Options.ReadOnly) return;
         if (string.IsNullOrEmpty(oldRelativePath) || string.IsNullOrEmpty(newRelativePath)) return;
         if (IsInLostAndFound(oldRelativePath) || IsInLostAndFound(newRelativePath)) return;
+
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.HandleFileRenamed");
+        scope.SetTag("relative.path.old", oldRelativePath);
+        scope.SetTag("relative.path.new", newRelativePath);
+        scope.SetTag("is.directory", isDirectory);
 
         var oldKey = KeyPath.ToObjectKey(oldRelativePath);
         var newKey = KeyPath.ToObjectKey(newRelativePath);
@@ -513,6 +540,7 @@ internal sealed class ProjFsProvider : IRequiredCallbacks, IDisposable
         }
         catch (Exception ex)
         {
+            scope.Fail(ex);
             logger.LogError(ex, "Rename failed for {Old} -> {New}", oldRelativePath, newRelativePath);
         }
     }

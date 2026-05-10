@@ -1,4 +1,5 @@
 using Microsoft.Windows.ProjFS;
+using OSVFS.Diagnostics;
 
 namespace OSVFS.ProjFs;
 
@@ -126,7 +127,15 @@ internal sealed class NotificationCallbacks
         string relativePath,
         bool isDirectory,
         uint triggeringProcessId,
-        string triggeringProcessImageFileName) => !ReadOnly;
+        string triggeringProcessImageFileName)
+    {
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.PreDelete");
+        scope.SetTag("relative.path", relativePath);
+        scope.SetTag("is.directory", isDirectory);
+        var allow = !ReadOnly;
+        scope.SetTag("projfs.allowed", allow);
+        return allow;
+    }
 
     /// <summary>
     /// Notification: blocks renames when the provider is read-only.
@@ -135,7 +144,15 @@ internal sealed class NotificationCallbacks
         string relativePath,
         string destinationPath,
         uint triggeringProcessId,
-        string triggeringProcessImageFileName) => !ReadOnly;
+        string triggeringProcessImageFileName)
+    {
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.PreRename");
+        scope.SetTag("relative.path", relativePath);
+        scope.SetTag("destination.path", destinationPath);
+        var allow = !ReadOnly;
+        scope.SetTag("projfs.allowed", allow);
+        return allow;
+    }
 
     /// <summary>
     /// Notification: blocks hardlink creation when the provider is read-only.
@@ -144,7 +161,15 @@ internal sealed class NotificationCallbacks
         string relativePath,
         string destinationPath,
         uint triggeringProcessId,
-        string triggeringProcessImageFileName) => !ReadOnly;
+        string triggeringProcessImageFileName)
+    {
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.PreCreateHardlink");
+        scope.SetTag("relative.path", relativePath);
+        scope.SetTag("destination.path", destinationPath);
+        var allow = !ReadOnly;
+        scope.SetTag("projfs.allowed", allow);
+        return allow;
+    }
 
     /// <summary>
     /// Notification: forwards rename to the provider so the corresponding S3 object
@@ -159,10 +184,13 @@ internal sealed class NotificationCallbacks
         out NotificationType notificationMask)
     {
         notificationMask = NotificationType.UseExistingMask;
-        if (!ReadOnly)
-        {
-            provider.HandleFileRenamed(relativePath, destinationPath, isDirectory);
-        }
+        if (ReadOnly) return;
+
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.FileRenamed");
+        scope.SetTag("relative.path", relativePath);
+        scope.SetTag("destination.path", destinationPath);
+        scope.SetTag("is.directory", isDirectory);
+        provider.HandleFileRenamed(relativePath, destinationPath, isDirectory);
     }
 
     /// <summary>
@@ -201,6 +229,12 @@ internal sealed class NotificationCallbacks
     {
         if (ReadOnly) return;
 
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.FileHandleClosedFileModifiedOrDeleted");
+        scope.SetTag("relative.path", relativePath);
+        scope.SetTag("is.directory", isDirectory);
+        scope.SetTag("file.modified", isFileModified);
+        scope.SetTag("file.deleted", isFileDeleted);
+
         // Deletion takes precedence: a deleted file cannot be uploaded.
         if (isFileDeleted)
         {
@@ -221,5 +255,12 @@ internal sealed class NotificationCallbacks
     public bool OnFilePreConvertToFull(
         string relativePath,
         uint triggeringProcessId,
-        string triggeringProcessImageFileName) => !ReadOnly;
+        string triggeringProcessImageFileName)
+    {
+        using var scope = OsvfsTelemetry.StartProjFsOperation("ProjFS.PreConvertToFull");
+        scope.SetTag("relative.path", relativePath);
+        var allow = !ReadOnly;
+        scope.SetTag("projfs.allowed", allow);
+        return allow;
+    }
 }

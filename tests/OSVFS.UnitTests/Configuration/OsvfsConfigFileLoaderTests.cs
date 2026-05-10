@@ -153,6 +153,87 @@ public class OsvfsConfigFileLoaderTests
     }
 
     [Fact]
+    public void Parse_telemetry_section_returns_full_record()
+    {
+        const string toml = """
+            [telemetry]
+            otlp-endpoint = "http://collector:4317"
+            otlp-protocol = "http-protobuf"
+            service-name = "osvfs-prod"
+            """;
+
+        var config = OsvfsConfigFileLoader.ParseContent(toml, "test.toml");
+
+        Assert.NotNull(config.Telemetry);
+        Assert.Equal("http://collector:4317", config.Telemetry!.OtlpEndpoint);
+        Assert.Equal(OtlpProtocolKind.HttpProtobuf, config.Telemetry.OtlpProtocol);
+        Assert.Equal("osvfs-prod", config.Telemetry.ServiceName);
+    }
+
+    [Fact]
+    public void Parse_telemetry_section_accepts_snake_aliases()
+    {
+        const string toml = """
+            [telemetry]
+            otlp_endpoint = "http://collector:4318"
+            otlp_protocol = "grpc"
+            service_name = "osvfs-staging"
+            """;
+
+        var config = OsvfsConfigFileLoader.ParseContent(toml, "test.toml");
+
+        Assert.NotNull(config.Telemetry);
+        Assert.Equal("http://collector:4318", config.Telemetry!.OtlpEndpoint);
+        Assert.Equal(OtlpProtocolKind.Grpc, config.Telemetry.OtlpProtocol);
+        Assert.Equal("osvfs-staging", config.Telemetry.ServiceName);
+    }
+
+    [Fact]
+    public void Parse_telemetry_unknown_protocol_throws()
+    {
+        var ex = Assert.Throws<OsvfsConfigException>(() =>
+            OsvfsConfigFileLoader.ParseContent(
+                "[telemetry]\notlp-protocol = \"thrift\"", "test.toml"));
+        Assert.Contains("thrift", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_no_telemetry_section_returns_null()
+    {
+        var config = OsvfsConfigFileLoader.ParseContent("verbose = true", "test.toml");
+        Assert.Null(config.Telemetry);
+    }
+
+    [Fact]
+    public void MergeOverlay_telemetry_overlay_wins_per_key()
+    {
+        var user = new OsvfsConfigFile
+        {
+            Telemetry = new OsvfsTelemetryConfig
+            {
+                OtlpEndpoint = "http://user:4317",
+                OtlpProtocol = OtlpProtocolKind.Grpc,
+                ServiceName = "user-name",
+            },
+        };
+        var project = new OsvfsConfigFile
+        {
+            Telemetry = new OsvfsTelemetryConfig
+            {
+                OtlpEndpoint = "http://project:4317",
+                // Protocol intentionally omitted to assert per-key precedence.
+            },
+        };
+
+        var merged = user.MergeOverlay(project);
+
+        Assert.NotNull(merged.Telemetry);
+        Assert.Equal("http://project:4317", merged.Telemetry!.OtlpEndpoint);
+        Assert.Equal(OtlpProtocolKind.Grpc, merged.Telemetry.OtlpProtocol);
+        Assert.Equal("user-name", merged.Telemetry.ServiceName);
+    }
+
+    [Fact]
     public void Parse_type_mismatch_throws()
     {
         var ex = Assert.Throws<OsvfsConfigException>(() =>

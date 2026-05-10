@@ -9,6 +9,8 @@
     <PackageVersion Include="AWSSDK.SSO" Version="4.0.2.13" />
     <PackageVersion Include="AWSSDK.SSOOIDC" Version="4.0.3" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.5.0" />
+    <PackageVersion Include="OpenTelemetry" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
     <PackageVersion Include="System.CommandLine" Version="2.0.7" />
     <PackageVersion Include="Microsoft.Windows.ProjFS" Version="2.1.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.7" />

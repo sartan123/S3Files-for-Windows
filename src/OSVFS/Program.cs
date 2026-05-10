@@ -8,6 +8,7 @@ using OSVFS.Logging;
 using OSVFS.LostAndFound;
 using OSVFS.Notifications;
 using OSVFS.ProjFs;
+using OSVFS.Telemetry;
 
 const int ExitGeneralException = 2;
 
@@ -48,6 +49,26 @@ rootCommand.SetAction(parseResult =>
     var logger = loggerFactory.CreateLogger("OSVFS");
     using var refreshNotifier = new WindowsBalloonTipNotifier(
         loggerFactory.CreateLogger<WindowsBalloonTipNotifier>());
+
+    var telemetryConfig = OsvfsTelemetryHost.ResolveEffectiveConfig(
+        fileConfig?.Telemetry, parseResult.GetValue(cliOptions.OtlpEndpoint));
+    OsvfsTelemetryHost? telemetryHost;
+    try
+    {
+        telemetryHost = OsvfsTelemetryHost.Create(telemetryConfig);
+    }
+    catch (OsvfsConfigException ex)
+    {
+        logger.LogError("{Message}", ex.Message);
+        return ExitGeneralException;
+    }
+    using var _telemetry = telemetryHost;
+    if (telemetryHost is not null)
+    {
+        logger.LogInformation(
+            "OTLP telemetry enabled: endpoint={Endpoint}, protocol={Protocol}",
+            telemetryConfig!.OtlpEndpoint, telemetryConfig.OtlpProtocol ?? OtlpProtocolKind.Grpc);
+    }
 
     if (fileConfig is null || fileConfig.Mounts.Count == 0)
     {

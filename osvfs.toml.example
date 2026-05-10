@@ -146,6 +146,31 @@
 # verbose = false
 
 # -----------------------------------------------------------------------------
+# OpenTelemetry / OTLP exporter (commented out)
+#
+# Uncomment the [telemetry] table below to ship spans + metrics from the
+# 'osvfs.s3' (S3 backend) and 'osvfs.projfs' (Windows ProjFS callbacks)
+# sources to an OTLP collector (Jaeger / Tempo for traces; Prometheus /
+# Mimir for metrics). All keys are optional; omitting the whole section
+# keeps OTel disabled and the SDK initialization cost off the hot path.
+# The CLI flag --otlp-endpoint overrides 'otlp-endpoint' while keeping
+# 'otlp-protocol' / 'service-name' from this file.
+# -----------------------------------------------------------------------------
+
+# [telemetry]
+# OTLP collector endpoint. http://localhost:4317 = gRPC default,
+# http://localhost:4318 = HTTP/Protobuf default.
+# otlp-endpoint = "http://localhost:4317"
+#
+# Wire protocol. "grpc" (default) or "http-protobuf".
+# otlp-protocol = "grpc"
+#
+# service.name resource attribute attached to every emitted span / metric.
+# Defaults to "osvfs"; override when running multiple OSVFS hosts so dashboards
+# can split them apart.
+# service-name = "osvfs"
+
+# -----------------------------------------------------------------------------
 # Multi-mount example (commented out)
 #
 # Uncomment the [[mount]] tables below AND remove every per-mount key from the

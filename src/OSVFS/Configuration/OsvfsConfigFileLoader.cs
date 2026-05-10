@@ -186,7 +186,52 @@ internal static class OsvfsConfigFileLoader
             Verbose = ReadBool(table, "verbose", sourcePath),
             LogFormat = ReadLogFormat(table, sourcePath),
             Mounts = mounts,
+            Telemetry = ReadTelemetry(table, sourcePath),
         };
+    }
+
+    /// <summary>
+    /// Reads the <c>[telemetry]</c> sub-table when present. Returns null
+    /// when the section is absent so the merged config keeps the lower
+    /// layer's value untouched. All recognized keys are nullable inside
+    /// the returned record so a partial section can still merge cleanly.
+    /// </summary>
+    private static OsvfsTelemetryConfig? ReadTelemetry(TomlTable table, string sourcePath)
+    {
+        if (!table.TryGetValue("telemetry", out var raw) || raw is null)
+        {
+            return null;
+        }
+        if (raw is not TomlTable section)
+        {
+            throw new OsvfsConfigException(
+                $"OSVFS config file '{sourcePath}': 'telemetry' must be a TOML table, " +
+                $"got {raw.GetType().Name}.");
+        }
+
+        return new OsvfsTelemetryConfig
+        {
+            OtlpEndpoint = ReadString(section, "otlp-endpoint", "otlp_endpoint", sourcePath),
+            OtlpProtocol = ReadOtlpProtocol(section, sourcePath),
+            ServiceName = ReadString(section, "service-name", "service_name", sourcePath),
+        };
+    }
+
+    /// <summary>
+    /// Reads <c>otlp-protocol</c> as a case-insensitive enum literal.
+    /// Accepts <c>grpc</c> / <c>http-protobuf</c> (kebab) and falls
+    /// through to the standard enum names.
+    /// </summary>
+    private static OtlpProtocolKind? ReadOtlpProtocol(TomlTable table, string sourcePath)
+    {
+        var raw = ReadString(table, "otlp-protocol", "otlp_protocol", sourcePath);
+        if (raw is null) return null;
+        var normalized = raw.Replace("-", string.Empty);
+        if (Enum.TryParse<OtlpProtocolKind>(normalized, ignoreCase: true, out var parsed))
+            return parsed;
+        throw new OsvfsConfigException(
+            $"OSVFS config file '{sourcePath}': unknown otlp-protocol '{raw}'. Expected one of: " +
+            "grpc, http-protobuf.");
     }
 
     /// <summary>

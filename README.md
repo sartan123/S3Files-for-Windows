@@ -505,6 +505,171 @@ line):
 }
 ```
 
+### OpenTelemetry tracing and metrics
+
+OSVFS instruments every S3 backend operation **and** every meaningful
+ProjFS callback with two
+[`ActivitySource`](https://learn.microsoft.com/dotnet/core/diagnostics/distributed-tracing)s
+and matching `Meter`s. Wire up the OTLP exporter and a collector to see
+where Windows-side virtualization time is spent, which S3 calls back it,
+and how the byte volume / error rate breaks down — all without touching
+the binary.
+
+#### S3 backend signals (source `osvfs.s3`)
+
+| Signal | Type | Tags / instruments |
+| --- | --- | --- |
+| `S3.List`, `S3.ListAll`, `S3.ListRecursive`, `S3.Head`, `S3.Get`, `S3.Put`, `S3.Delete`, `S3.DeletePrefix`, `S3.Rename`, `S3.RenamePrefix`, `S3.Copy` | Activity (`Client`) | `relative.path`, `relative.directory`, `byte.offset`, `byte.length`, etc. |
+| `osvfs.s3.bytes_uploaded` | Counter (`By`) | none |
+| `osvfs.s3.bytes_downloaded` | Counter (`By`) | none |
+| `osvfs.s3.errors_total` | Counter (`{error}`) | `operation` |
+| `osvfs.s3.duration` | Histogram (`ms`) | `operation` |
+
+`S3.Copy` runs as a child of `S3.Rename` so a Rename's wire-level
+CopyObject latency shows up next to the bookkeeping cost in a flame
+graph.
+
+#### ProjFS callback signals (source `osvfs.projfs`)
+
+| Signal | Type | Tags |
+| --- | --- | --- |
+| `ProjFS.StartDirectoryEnumeration` | Activity (`Internal`) | `relative.path` |
+| `ProjFS.GetPlaceholderInfo` | Activity (`Internal`) | `relative.path`, `projfs.result` (`not_found` when 404) |
+| `ProjFS.GetFileData` | Activity (`Internal`) | `relative.path`, `byte.offset`, `byte.length` |
+| `ProjFS.PreDelete`, `ProjFS.PreRename`, `ProjFS.PreCreateHardlink`, `ProjFS.PreConvertToFull` | Activity (`Internal`) | `relative.path` (+ `destination.path` for rename / hardlink), `projfs.allowed` |
+| `ProjFS.FileRenamed`, `ProjFS.FileHandleClosedFileModifiedOrDeleted` | Activity (`Internal`) | `relative.path`, `is.directory`, plus `file.modified` / `file.deleted` for the close-handler |
+| `ProjFS.HandleFileModified`, `ProjFS.HandleFileDeleted`, `ProjFS.HandleFileRenamed` | Activity (`Internal`) | provider-side handler running inside the matching notification span |
+| `osvfs.projfs.errors_total` | Counter (`{error}`) | `operation` |
+| `osvfs.projfs.duration` | Histogram (`ms`) | `operation` |
+
+Spans are nested into a single tree per user action — for example,
+saving a modified file produces:
+
+```
+ProjFS.FileHandleClosedFileModifiedOrDeleted
+  └─ ProjFS.HandleFileModified
+       └─ S3.Put
+```
+
+so a single Jaeger trace shows the full virtualization → backend chain
+with each segment's contribution to total latency.
+
+Very high-frequency, side-effect-free notifications (`FileOpened`,
+`NewFileCreated`, `FileOverwritten`, `HardlinkCreated`,
+`FileHandleClosedNoModification`) and per-entry
+`GetDirectoryEnumeration` / `EndDirectoryEnumeration` are
+intentionally **not** instrumented — they fire dozens of times per UI
+folder open and have no S3-backed work, so capturing them would inflate
+trace volume without adding signal.
+
+#### Enable the OTLP exporter
+
+Pass the collector endpoint with `--otlp-endpoint` for an ad-hoc run, or
+add a `[telemetry]` section to `osvfs.toml` for persistent configuration:
+
+```powershell
+osvfs --otlp-endpoint http://localhost:4317   # gRPC, default protocol
+osvfs --otlp-endpoint http://localhost:4318   # HTTP/Protobuf, see [telemetry] block below
+```
+
+```toml
+# osvfs.toml — persistent telemetry
+[telemetry]
+otlp-endpoint = "http://localhost:4317"
+otlp-protocol = "grpc"          # "grpc" (default) or "http-protobuf"
+service-name  = "osvfs"         # service.name resource attribute (default "osvfs")
+```
+
+When `--otlp-endpoint` is supplied, it overrides `[telemetry] otlp-endpoint`
+while preserving the file's `otlp-protocol` and `service-name` keys.
+Telemetry stays disabled when neither source supplies an endpoint.
+
+#### Run a local collector + Jaeger + Prometheus
+
+The OpenTelemetry Collector contrib image bundles every OTLP receiver and
+the exporters needed to fan signals out to Jaeger (traces) and Prometheus
+(metrics). A minimal `docker-compose.yml`:
+
+```yaml
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    ports: ["16686:16686"]   # UI
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+
+  otelcol:
+    image: otel/opentelemetry-collector-contrib:0.108.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otelcol.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "9464:9464"   # Prometheus scrape endpoint
+    depends_on: [jaeger, prometheus]
+```
+
+`otelcol.yaml`:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+      http:
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls: { insecure: true }
+  prometheus:
+    endpoint: 0.0.0.0:9464
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp/jaeger]
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+```
+
+`prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: otelcol
+    static_configs:
+      - targets: ["otelcol:9464"]
+```
+
+Start the stack and the OSVFS host:
+
+```powershell
+docker compose up -d
+osvfs --otlp-endpoint http://localhost:4317
+```
+
+- Jaeger UI → <http://localhost:16686> — pick the `osvfs` service to see
+  the per-operation flame graph (both `osvfs.s3` and `osvfs.projfs`
+  sources land under the same service.name).
+- Prometheus UI → <http://localhost:9090> — useful queries:
+  - `histogram_quantile(0.95, sum by (le, operation) (rate(osvfs_s3_duration_milliseconds_bucket[5m])))`
+    — p95 S3 backend latency by operation.
+  - `histogram_quantile(0.95, sum by (le, operation) (rate(osvfs_projfs_duration_milliseconds_bucket[5m])))`
+    — p95 ProjFS callback latency by operation. Subtract the S3 quantile
+    of the same operation to find the in-process overhead.
+  - `rate(osvfs_s3_errors_total[5m])` and
+    `rate(osvfs_projfs_errors_total[5m])` — per-pipeline error rates.
+  - `rate(osvfs_s3_bytes_uploaded_bytes_total[5m])` /
+    `rate(osvfs_s3_bytes_downloaded_bytes_total[5m])` — throughput.
+
 ### User-defined object metadata round-trip
 
 S3 lets every object carry an arbitrary number of user-defined headers (the
@@ -585,6 +750,11 @@ sync-interval-seconds = 30
 change-source        = "polling"                 # "polling" | "events"
 sync-mode            = "on-demand"               # "on-demand" | "full" — only used by polling
 event-queue          = ""                        # SQS URL/name, required for events
+
+[telemetry]                                       # optional, omitted = OTel disabled
+otlp-endpoint        = "http://localhost:4317"   # OTLP collector URL
+otlp-protocol        = "grpc"                    # "grpc" | "http-protobuf"
+service-name         = "osvfs"                   # service.name resource attribute
 ```
 
 A ready-to-edit sample is shipped as

@@ -44,6 +44,22 @@ internal sealed class MountCliOptions
     };
 
     /// <summary>
+    /// One-shot OTLP exporter destination. When supplied, the host
+    /// builds a TracerProvider / MeterProvider against this endpoint and
+    /// emits OSVFS spans + metrics to it. Overrides the
+    /// <c>[telemetry] otlp-endpoint</c> key in osvfs.toml when both are
+    /// present. Empty string is rejected; pass nothing to leave
+    /// telemetry off.
+    /// </summary>
+    public Option<string?> OtlpEndpoint { get; } = new("--otlp-endpoint")
+    {
+        Description =
+            "OTLP exporter endpoint (e.g. http://localhost:4317 for gRPC, http://localhost:4318 " +
+            "for HTTP/Protobuf). When set, OSVFS emits spans and metrics from the 'osvfs.s3' " +
+            "source to this endpoint. Overrides 'otlp-endpoint' in [telemetry] when supplied.",
+    };
+
+    /// <summary>
     /// Registers every option on <paramref name="command"/>. Used by the root
     /// command and each mount subcommand so the flags are uniformly available.
     /// </summary>
@@ -52,6 +68,7 @@ internal sealed class MountCliOptions
         command.Options.Add(Verbose);
         command.Options.Add(LogFormat);
         command.Options.Add(ConfigPath);
+        command.Options.Add(OtlpEndpoint);
     }
 
     /// <summary>

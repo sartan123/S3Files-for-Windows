@@ -29,6 +29,12 @@ internal sealed class OsvfsConfigFile
     public IReadOnlyList<OsvfsMountConfig> Mounts { get; init; } = [];
 
     /// <summary>
+    /// Optional <c>[telemetry]</c> section. Null when the file omits it
+    /// (telemetry stays off in that case).
+    /// </summary>
+    public OsvfsTelemetryConfig? Telemetry { get; init; }
+
+    /// <summary>
     /// Returns a copy of this config with values from <paramref name="overlay"/> taking
     /// precedence wherever they are non-null. Process-level fields merge per
     /// key; the <see cref="Mounts"/> list from <paramref name="overlay"/> wins
@@ -40,5 +46,19 @@ internal sealed class OsvfsConfigFile
         Verbose = overlay.Verbose ?? Verbose,
         LogFormat = overlay.LogFormat ?? LogFormat,
         Mounts = overlay.Mounts.Count > 0 ? overlay.Mounts : Mounts,
+        Telemetry = MergeTelemetry(Telemetry, overlay.Telemetry),
     };
+
+    /// <summary>
+    /// Folds the overlay's telemetry block onto the base. Either side
+    /// being null collapses to the other; both non-null delegates to
+    /// <see cref="OsvfsTelemetryConfig.MergeOverlay"/>.
+    /// </summary>
+    private static OsvfsTelemetryConfig? MergeTelemetry(
+        OsvfsTelemetryConfig? @base, OsvfsTelemetryConfig? overlay)
+    {
+        if (@base is null) return overlay;
+        if (overlay is null) return @base;
+        return @base.MergeOverlay(overlay);
+    }
 }

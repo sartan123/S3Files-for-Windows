@@ -4,6 +4,7 @@ using OSVFS.Credentials;
 using OSVFS.Logging;
 using OSVFS.Notifications;
 using OSVFS.ProjFs;
+using OSVFS.Telemetry;
 using System.CommandLine;
 
 namespace OSVFS;
@@ -98,6 +99,8 @@ internal static class MountCommandFactory
         using var refreshNotifier = new WindowsBalloonTipNotifier(
             loggerFactory.CreateLogger<WindowsBalloonTipNotifier>());
 
+        using var telemetryHost = StartTelemetry(parseResult, cliOptions, fileConfig, logger);
+
         var requestedName = parseResult.GetValue(nameOption);
         var mountConfig = SelectMount(fileConfig, requestedName, logger);
         if (mountConfig is null) return MountHost.ExitGeneralException;
@@ -159,6 +162,8 @@ internal static class MountCommandFactory
         using var refreshNotifier = new WindowsBalloonTipNotifier(
             loggerFactory.CreateLogger<WindowsBalloonTipNotifier>());
 
+        using var telemetryHost = StartTelemetry(parseResult, cliOptions, fileConfig, logger);
+
         if (fileConfig is null || fileConfig.Mounts.Count == 0)
         {
             logger.LogError(
@@ -197,6 +202,39 @@ internal static class MountCommandFactory
         {
             logger.LogCritical(ex, "fatal");
             return MountHost.ExitGeneralException;
+        }
+    }
+
+    /// <summary>
+    /// Resolves the effective telemetry config (CLI override on top of file
+    /// config) and builds the OTel pipeline if an endpoint was supplied.
+    /// Returns null when telemetry is disabled. Logs and rethrows on a
+    /// malformed endpoint so the caller can exit cleanly.
+    /// </summary>
+    private static OsvfsTelemetryHost? StartTelemetry(
+        ParseResult parseResult,
+        MountCliOptions cliOptions,
+        OsvfsConfigFile? fileConfig,
+        ILogger logger)
+    {
+        var telemetryConfig = OsvfsTelemetryHost.ResolveEffectiveConfig(
+            fileConfig?.Telemetry, parseResult.GetValue(cliOptions.OtlpEndpoint));
+        try
+        {
+            var host = OsvfsTelemetryHost.Create(telemetryConfig);
+            if (host is not null)
+            {
+                logger.LogInformation(
+                    "OTLP telemetry enabled: endpoint={Endpoint}, protocol={Protocol}",
+                    telemetryConfig!.OtlpEndpoint,
+                    telemetryConfig.OtlpProtocol ?? OtlpProtocolKind.Grpc);
+            }
+            return host;
+        }
+        catch (OsvfsConfigException ex)
+        {
+            logger.LogError("{Message}", ex.Message);
+            return null;
         }
     }
 
