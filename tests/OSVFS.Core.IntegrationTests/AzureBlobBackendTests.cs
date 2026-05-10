@@ -1,4 +1,5 @@
 using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using OSVFS.ObjectStore;
 using OSVFS.ObjectStore.AzureBlob;
 using System.Text;
@@ -52,6 +53,27 @@ public sealed class AzureBlobBackendTests : IAsyncLifetime
     public void UserMetadataMaxBytes_matches_Azure_8KiB_limit()
     {
         Assert.Equal(8 * 1024, backend.UserMetadataMaxBytes);
+    }
+
+    [Fact]
+    public async Task GetBucketVersioningStatus_returns_NotEnabled_when_soft_delete_off()
+    {
+        // Azurite starts with Soft Delete off, so the safety guard must refuse
+        // to start until the operator turns it on. The Versioning half of the
+        // bar is operator-side (see GetEnableVersioningInstructions); the
+        // automatic check covers Soft Delete alone because Versioning state
+        // lives on the ARM control plane that OSVFS does not depend on.
+        await SetSoftDeleteAsync(enabled: false);
+        var status = await backend.GetBucketVersioningStatusAsync(CancellationToken.None);
+        Assert.Equal(BucketVersioningStatus.NotEnabled, status);
+    }
+
+    [Fact]
+    public async Task GetBucketVersioningStatus_returns_Enabled_when_soft_delete_on()
+    {
+        await SetSoftDeleteAsync(enabled: true);
+        var status = await backend.GetBucketVersioningStatusAsync(CancellationToken.None);
+        Assert.Equal(BucketVersioningStatus.Enabled, status);
     }
 
     [Fact]
@@ -170,6 +192,24 @@ public sealed class AzureBlobBackendTests : IAsyncLifetime
             await backend.UploadAsync(
                 "meta/oversized.txt", ms, ifMatchETag: null, CancellationToken.None,
                 userMetadata: oversized));
+    }
+
+    /// <summary>
+    /// Flips the storage-account-level Soft Delete (blob retention) flag.
+    /// Azurite supports <c>SetServiceProperties</c> end-to-end so the IT
+    /// can drive the safety-guard decision table directly.
+    /// </summary>
+    private async Task SetSoftDeleteAsync(bool enabled)
+    {
+        var serviceClient = new BlobServiceClient(azurite.ConnectionString);
+        var resp = await serviceClient.GetPropertiesAsync();
+        var props = resp.Value;
+        props.DeleteRetentionPolicy = new BlobRetentionPolicy
+        {
+            Enabled = enabled,
+            Days = enabled ? 7 : null,
+        };
+        await serviceClient.SetPropertiesAsync(props);
     }
 
     private async Task UploadAsync(string relativePath, string body)

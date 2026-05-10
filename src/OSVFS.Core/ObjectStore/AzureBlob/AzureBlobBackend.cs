@@ -23,6 +23,7 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
 
     private readonly string containerName;
     private readonly string keyPrefix;
+    private readonly BlobServiceClient serviceClient;
     private readonly BlobContainerClient containerClient;
 
     /// <inheritdoc/>
@@ -52,7 +53,7 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
         this.containerName = containerName;
         this.keyPrefix = KeyPath.NormalizeKeyPrefix(keyPrefix);
 
-        var serviceClient = BuildServiceClient(credentials, endpointUrl);
+        serviceClient = BuildServiceClient(credentials, endpointUrl);
         containerClient = serviceClient.GetBlobContainerClient(containerName);
     }
 
@@ -214,15 +215,46 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
     }
 
     /// <inheritdoc/>
-    public Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken ct)
+    /// <remarks>
+    /// Azure storage-account Versioning is **not** exposed through the
+    /// data-plane <c>GetServiceProperties</c> response — that lives on the
+    /// Azure Resource Manager surface (<c>Microsoft.Storage</c> control
+    /// plane), which OSVFS deliberately does not depend on so a single SDK +
+    /// data-plane credential can drive the whole mount. We therefore check
+    /// the half of the safety bar the data plane *does* expose, namely
+    /// blob-level Soft Delete (<c>DeleteRetentionPolicy.Enabled</c>): if
+    /// Soft Delete is on, accidental local deletes propagate as tombstones
+    /// that stay recoverable for the configured retention window. Versioning
+    /// — which protects against the *overwrite* path — is an operator
+    /// responsibility surfaced through <see cref="GetEnableVersioningInstructions"/>:
+    /// the remediation message asks for both <c>--enable-versioning</c> AND
+    /// <c>--enable-delete-retention</c>, so an operator who follows it ends
+    /// up with the full Phase-2 "Soft Delete + Versioning" posture even
+    /// though only the Soft Delete half is automatically verified.
+    /// </remarks>
+    public async Task<BucketVersioningStatus> GetBucketVersioningStatusAsync(CancellationToken ct)
     {
-        // Step 2A stub: pretend versioning is on so the safety guard does not
-        // block development against Azurite (Azurite does not implement
-        // versioning). Step 2C (#53) reads the storage account's blob-service
-        // properties for the real check, requiring both Versioning and Soft
-        // Delete to be enabled.
-        _ = ct;
-        return Task.FromResult(BucketVersioningStatus.Enabled);
+        BlobServiceProperties props;
+        try
+        {
+            var resp = await serviceClient.GetPropertiesAsync(ct).ConfigureAwait(false);
+            props = resp.Value;
+        }
+        catch (RequestFailedException)
+        {
+            // Reading service properties requires storage-account-level read;
+            // if the supplied credential lacks it (common with narrowly-scoped
+            // SAS or RBAC roles) we cannot confirm safety and fall back to
+            // NotEnabled. The startup guard then surfaces the same
+            // "enable Soft Delete + Versioning" hint as if the account were
+            // unprotected — the right user-facing state.
+            return BucketVersioningStatus.NotEnabled;
+        }
+
+        var softDelete = props.DeleteRetentionPolicy?.Enabled == true;
+        return softDelete
+            ? BucketVersioningStatus.Enabled
+            : BucketVersioningStatus.NotEnabled;
     }
 
     /// <inheritdoc/>
