@@ -629,15 +629,13 @@ metrics-listen = "127.0.0.1:9999"
 非ループバックの prefix は管理者権限なし実行時に
 `netsh http add urlacl` での予約も必要です。
 
-最小構成の `prometheus.yml` スクレイプ設定:
-
-```yaml
-scrape_configs:
-  - job_name: osvfs
-    scrape_interval: 15s
-    static_configs:
-      - targets: ['127.0.0.1:9999']
-```
+利用可能な Prometheus スクレイプ設定は
+[`examples/otel/prometheus.yml`](./examples/otel/prometheus.yml)
+として同梱しています。OTel Collector 経由の push 経路 (`otelcol:9464`)
+とホスト直 `/metrics` の pull 経路 (`host.docker.internal:9999`) の
+2 ジョブを定義しているので、どちらの経路でもこの 1 ファイルで賄えます。
+リスナーを既定以外の host:port にバインドした場合は `targets:` を
+書き換えてください。
 
 メトリクス名は OTLP 経路と完全一致するため (例:
 `osvfs_s3_bytes_uploaded_bytes_total`、
@@ -653,7 +651,7 @@ OpenTelemetry Collector contrib + Jaeger v2 + Prometheus を組み合わせ
 | --- | --- |
 | [`examples/otel/docker-compose.yml`](./examples/otel/docker-compose.yml) | `jaeger` / `prometheus` / `otelcol` を起動。4317 (OTLP gRPC) / 4318 (OTLP HTTP) / 16686 (Jaeger UI) / 9090 (Prometheus UI) を公開。 |
 | [`examples/otel/otelcol.yaml`](./examples/otel/otelcol.yaml) | Collector パイプライン設定。OTLP receiver → Jaeger (traces) / Prometheus exporter on 9464 (metrics)。 |
-| [`examples/otel/prometheus.yml`](./examples/otel/prometheus.yml) | Prometheus のスクレイプ設定。`otelcol:9464` を 1 ジョブで監視。 |
+| [`examples/otel/prometheus.yml`](./examples/otel/prometheus.yml) | Prometheus のスクレイプ設定。`otelcol:9464` (push 経路) と `host.docker.internal:9999` (`/metrics` 直接 pull 経路) の 2 ジョブを定義。 |
 
 スタックを起動して OSVFS をマウント:
 

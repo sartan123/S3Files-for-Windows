@@ -619,15 +619,13 @@ interface and emits a startup warning. On Windows, non-loopback prefixes
 also require an `netsh http add urlacl` reservation when running as a
 non-admin user.
 
-A minimal `prometheus.yml` scrape job:
-
-```yaml
-scrape_configs:
-  - job_name: osvfs
-    scrape_interval: 15s
-    static_configs:
-      - targets: ['127.0.0.1:9999']
-```
+A ready-to-use scrape config is checked in at
+[`examples/otel/prometheus.yml`](./examples/otel/prometheus.yml). It
+defines two jobs — one for the OTel Collector push path
+(`otelcol:9464`) and one for the direct `/metrics` pull path
+(`host.docker.internal:9999`) — so the same file works for both. Adjust
+the `targets:` entry if you bound the listener to a non-default
+host:port.
 
 The metric names match the OTLP path exactly (e.g.
 `osvfs_s3_bytes_uploaded_bytes_total`,
@@ -644,7 +642,7 @@ v2 + Prometheus) is checked in under
 | --- | --- |
 | [`examples/otel/docker-compose.yml`](./examples/otel/docker-compose.yml) | Brings up `jaeger`, `prometheus`, and `otelcol`. Exposes 4317 (OTLP gRPC), 4318 (OTLP HTTP), 16686 (Jaeger UI), 9090 (Prometheus UI). |
 | [`examples/otel/otelcol.yaml`](./examples/otel/otelcol.yaml) | Collector pipeline: OTLP receiver → Jaeger (traces) + Prometheus exporter on 9464 (metrics). |
-| [`examples/otel/prometheus.yml`](./examples/otel/prometheus.yml) | Prometheus scrape config pointing at `otelcol:9464`. |
+| [`examples/otel/prometheus.yml`](./examples/otel/prometheus.yml) | Prometheus scrape config with two jobs: `otelcol:9464` (push path) and `host.docker.internal:9999` (direct `/metrics` pull path). |
 
 Start the stack and the OSVFS host:
 

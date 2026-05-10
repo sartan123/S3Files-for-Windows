@@ -1,12 +1,41 @@
 # Prometheus configuration for the OSVFS sample stack.
 #
-# Scrapes the OpenTelemetry Collector's Prometheus endpoint exposed at
-# otelcol:9464 every 15 s (the default interval), so OSVFS metrics
-# (osvfs_s3_*, osvfs_projfs_*) become queryable in the Prometheus UI
-# at http://localhost:9090.
+# Two scrape jobs are defined so the same file works for both metric paths:
+#
+#   1. otelcol  — pulls metrics from the OpenTelemetry Collector on
+#                 otelcol:9464 (push path: OSVFS → OTLP → otelcol →
+#                 Prometheus). Use this when OSVFS is started with
+#                 --otlp-endpoint http://localhost:4317.
+#
+#   2. osvfs    — pulls metrics directly from the OSVFS host's built-in
+#                 /metrics listener (pull path, no collector). Use this
+#                 when OSVFS is started with
+#                 --metrics-listen 127.0.0.1:9999 (or the equivalent
+#                 [telemetry] metrics-listen key in osvfs.toml).
+#
+# host.docker.internal works on Docker Desktop (Windows / macOS) and
+# resolves to the host network from inside the prometheus container.
+# On Linux, replace it with the host's bridge IP or run prometheus on
+# the host network.
+#
+# Both jobs can be active at the same time — Prometheus deduplicates
+# samples per (job, instance) — but you only need the one matching the
+# OSVFS launch flag. Comment the other out if a duplicate target spams
+# the targets page with `down` entries.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
 
 scrape_configs:
+  # Push path: OSVFS → OTLP collector → Prometheus scrape on 9464.
   - job_name: otelcol
     static_configs:
       - targets:
           - otelcol:9464
+
+  # Pull path: Prometheus scrapes OSVFS's built-in /metrics directly.
+  - job_name: osvfs
+    static_configs:
+      - targets:
+          - host.docker.internal:9999
