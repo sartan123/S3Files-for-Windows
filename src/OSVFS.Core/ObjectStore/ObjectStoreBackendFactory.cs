@@ -58,9 +58,8 @@ internal static class ObjectStoreBackendFactory
             ObjectStoreProvider.Gcs => DisposeAndThrow(upLimiter, downLimiter, new NotSupportedException(
                 "Google Cloud Storage backend is not yet implemented. " +
                 "Currently only --provider s3 is supported.")),
-            ObjectStoreProvider.AzureBlob => DisposeAndThrow(upLimiter, downLimiter, new NotSupportedException(
-                "Azure Blob Storage backend is not yet implemented. " +
-                "Currently only --provider s3 is supported.")),
+            ObjectStoreProvider.AzureBlob => CreateAzureBlobBackend(
+                bucket, endpointUrl, keyPrefix, credentials, upLimiter, downLimiter, provider),
             _ => DisposeAndThrow(upLimiter, downLimiter, new ArgumentOutOfRangeException(
                 nameof(provider), provider, "Unknown object-store provider.")),
         };
@@ -103,5 +102,31 @@ internal static class ObjectStoreBackendFactory
         up?.Dispose();
         down?.Dispose();
         throw ex;
+    }
+
+    /// <summary>
+    /// Builds the Azure Blob arm. Bandwidth limiters are accepted on the
+    /// factory surface for symmetry with S3 but are not yet plumbed through
+    /// the Azure backend (Step 2D wires them into the Block Blob commit
+    /// path). They are disposed here so the host does not leak them.
+    /// </summary>
+    private static AzureBlob.AzureBlobBackend CreateAzureBlobBackend(
+        string bucket,
+        string? endpointUrl,
+        string? keyPrefix,
+        IObjectStoreCredentialSource? credentials,
+        TokenBucketRateLimiter? upLimiter,
+        TokenBucketRateLimiter? downLimiter,
+        ObjectStoreProvider provider)
+    {
+        // Step 2A backend ignores rate limiters; dispose so they don't leak.
+        // Step 2D will move them into the AzureBlobBackend constructor.
+        upLimiter?.Dispose();
+        downLimiter?.Dispose();
+        return new AzureBlob.AzureBlobBackend(
+            bucket,
+            CastCredentials<AzureBlob.AzureCredentialSource>(credentials, provider),
+            endpointUrl,
+            keyPrefix);
     }
 }

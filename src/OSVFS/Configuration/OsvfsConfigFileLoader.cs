@@ -292,6 +292,7 @@ internal static class OsvfsConfigFileLoader
             SyncMode = ReadSyncMode(table, sourcePath),
             EventQueue = ReadString(table, "event-queue", "event_queue", sourcePath),
             AwsProfile = ReadString(table, "aws-profile", "aws_profile", sourcePath),
+            ConnectionString = ReadString(table, "connection-string", "connection_string", sourcePath),
             BandwidthUp = ReadString(table, "bandwidth-up", "bandwidth_up", sourcePath),
             BandwidthDown = ReadString(table, "bandwidth-down", "bandwidth_down", sourcePath),
             MultipartThreshold = ReadString(table, "multipart-threshold", "multipart_threshold", sourcePath),
@@ -322,6 +323,7 @@ internal static class OsvfsConfigFileLoader
         || mount.SyncMode is not null
         || mount.EventQueue is not null
         || mount.AwsProfile is not null
+        || mount.ConnectionString is not null
         || mount.BandwidthUp is not null
         || mount.BandwidthDown is not null
         || mount.MultipartThreshold is not null
@@ -358,6 +360,7 @@ internal static class OsvfsConfigFileLoader
             "sync-mode", "sync_mode",
             "event-queue", "event_queue",
             "aws-profile", "aws_profile",
+            "connection-string", "connection_string",
             "bandwidth-up", "bandwidth_up",
             "bandwidth-down", "bandwidth_down",
             "multipart-threshold", "multipart_threshold",

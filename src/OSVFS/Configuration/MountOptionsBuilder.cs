@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using OSVFS.Credentials;
 using OSVFS.Net;
 using OSVFS.ObjectStore;
+using OSVFS.ObjectStore.AzureBlob;
 
 namespace OSVFS.Configuration;
 
@@ -55,8 +56,12 @@ internal static class MountOptionsBuilder
                 "[[mount]] table.");
         }
 
-        var credentials = ResolveCredential(
-            credentialStore, sharedProfileResolver, mount.AwsProfile, mount.Name, logger);
+        IObjectStoreCredentialSource? credentials = (mount.Provider ?? ObjectStoreProvider.S3) switch
+        {
+            ObjectStoreProvider.AzureBlob => ResolveAzureCredential(mount, logger),
+            _ => ResolveCredential(
+                credentialStore, sharedProfileResolver, mount.AwsProfile, mount.Name, logger),
+        };
 
         BandwidthLimits bandwidthLimits;
         long? multipartThresholdBytes;
@@ -158,6 +163,33 @@ internal static class MountOptionsBuilder
     /// Both misses are reported as a single <see cref="OsvfsConfigException"/> so
     /// multi-mount runs surface which entry blew up.
     /// </summary>
+    /// <summary>
+    /// Resolves the Azure Blob credential source from the mount config. Step 2A
+    /// only supports the connection-string branch; SAS / Managed Identity /
+    /// <c>DefaultAzureCredential</c> branches join here in Step 2B (#52).
+    /// Throws <see cref="OsvfsConfigException"/> when none of the supported
+    /// keys are present so the operator gets a clear error rather than a
+    /// downstream Azure SDK failure.
+    /// </summary>
+    private static AzureCredentialSource? ResolveAzureCredential(
+        OsvfsMountConfig mount, ILogger logger)
+    {
+        if (!string.IsNullOrEmpty(mount.ConnectionString))
+        {
+            // Avoid logging the connection string itself — it carries the account
+            // key in plaintext on the standard form. The fact that one was supplied
+            // is enough.
+            logger.LogInformation(
+                "Mount '{Mount}': using Azure credentials from connection string.", mount.Name);
+            return AzureCredentialSource.FromConnectionString(
+                mount.ConnectionString, "Azure connection string");
+        }
+
+        throw new OsvfsConfigException(
+            $"Mount '{mount.Name}': Azure Blob backend requires a 'connection-string' " +
+            "key in osvfs.toml (SAS / Managed Identity / DefaultAzureCredential land in Step 2B).");
+    }
+
     private static AwsCredentialSource? ResolveCredential(
         IAwsCredentialStore store,
         ISharedProfileResolver sharedProfileResolver,

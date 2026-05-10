@@ -80,6 +80,16 @@ internal sealed class OsvfsMountConfig
     public string? AwsProfile { get; init; }
 
     /// <summary>
+    /// Azure Storage connection string (only consulted when
+    /// <see cref="Provider"/> is <see cref="ObjectStoreProvider.AzureBlob"/>).
+    /// Carries account name, key, and endpoints in one TOML value — the
+    /// shape Azurite hands out by default and what most operators paste from
+    /// the Azure Portal "Access keys" blade. SAS / Managed Identity /
+    /// <c>DefaultAzureCredential</c> get their own keys in Step 2B (#52).
+    /// </summary>
+    public string? ConnectionString { get; init; }
+
+    /// <summary>
     /// rclone-style upload bandwidth ceiling (e.g. <c>"5M"</c>). Null disables.
     /// </summary>
     public string? BandwidthUp { get; init; }
@@ -153,6 +163,7 @@ internal sealed class OsvfsMountConfig
         SyncMode = overlay.SyncMode ?? SyncMode,
         EventQueue = overlay.EventQueue ?? EventQueue,
         AwsProfile = overlay.AwsProfile ?? AwsProfile,
+        ConnectionString = overlay.ConnectionString ?? ConnectionString,
         BandwidthUp = overlay.BandwidthUp ?? BandwidthUp,
         BandwidthDown = overlay.BandwidthDown ?? BandwidthDown,
         MultipartThreshold = overlay.MultipartThreshold ?? MultipartThreshold,

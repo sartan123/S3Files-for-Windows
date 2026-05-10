@@ -23,8 +23,10 @@
     </PackageReference>
     <PackageReference Include="Testcontainers" />
     <PackageReference Include="Testcontainers.LocalStack" />
+    <PackageReference Include="Testcontainers.Azurite" />
     <PackageReference Include="AWSSDK.S3" />
     <PackageReference Include="AWSSDK.SQS" />
+    <PackageReference Include="Azure.Storage.Blobs" />
   </ItemGroup>
 
   <ItemGroup>

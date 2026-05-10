@@ -41,12 +41,32 @@ public class ObjectStoreBackendFactoryTests
     }
 
     [Fact]
-    public void Create_throws_NotSupportedException_for_AzureBlob()
+    public void Create_throws_for_AzureBlob_when_credentials_are_missing()
     {
-        Assert.Throws<NotSupportedException>(() =>
+        // Step 2A wires up the AzureBlob arm; without a connection string
+        // (today the only supported AzureCredentialSource branch) the
+        // backend constructor surfaces a clear InvalidOperationException
+        // rather than letting the SDK fail downstream.
+        Assert.Throws<InvalidOperationException>(() =>
             ObjectStoreBackendFactory.Create(
                 ObjectStoreProvider.AzureBlob,
                 bucket: "my-bucket"));
+    }
+
+    [Fact]
+    public void Create_throws_for_AzureBlob_when_credentials_are_not_AzureCredentialSource()
+    {
+        var foreign = new ForeignCredentialSource();
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            ObjectStoreBackendFactory.Create(
+                ObjectStoreProvider.AzureBlob,
+                bucket: "my-bucket",
+                credentials: foreign));
+
+        Assert.Contains("AzureBlob", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("AzureCredentialSource", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(ForeignCredentialSource), ex.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
