@@ -4,10 +4,10 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="AWSSDK.S3" Version="4.0.22.2" />
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.23" />
     <PackageVersion Include="AWSSDK.SQS" Version="4.0.2.28" />
-    <PackageVersion Include="AWSSDK.SSO" Version="4.0.2.13" />
-    <PackageVersion Include="AWSSDK.SSOOIDC" Version="4.0.3" />
+    <PackageVersion Include="AWSSDK.SSO" Version="4.0.2.27" />
+    <PackageVersion Include="AWSSDK.SSOOIDC" Version="4.0.3.28" />
     <!-- Pinned to a version whose default x-ms-version is supported by Azurite
          3.35 (the floating "latest" tag we run in IT). Newer SDK builds raise
          the default API version forward of what Azurite ships, breaking the

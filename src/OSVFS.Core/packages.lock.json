@@ -4,9 +4,9 @@
     "net10.0": {
       "AWSSDK.S3": {
         "type": "Direct",
-        "requested": "[4.0.22.2, )",
-        "resolved": "4.0.22.2",
-        "contentHash": "RYBhoTFlMRq2tiqv/8FfSRFkNz0OCY2U5AbwH5PWpI/XhI3eQp34ujVAT9gD9DqOUHKDaQvJegauypUSO6wkjQ==",
+        "requested": "[4.0.23, )",
+        "resolved": "4.0.23",
+        "contentHash": "yPvCj0ITnniE8j2YVVCrTfutOfaw+a9CememSzqYL2Y7zQaKLZL6F5385zI8NqnCpw26OzU5cwmKzAC6xssbGw==",
         "dependencies": {
           "AWSSDK.Core": "[4.0.6.1, 5.0.0)"
         }
@@ -22,20 +22,20 @@
       },
       "AWSSDK.SSO": {
         "type": "Direct",
-        "requested": "[4.0.2.13, )",
-        "resolved": "4.0.2.13",
-        "contentHash": "u/hTZe9m+th0A7QYRMtMhXsm4CUzofwpJH7WnfzIOpPrUHrqZs2T01I0r0XvbiYsrw5RQEqId5qnZP/tdXYR7w==",
+        "requested": "[4.0.2.27, )",
+        "resolved": "4.0.2.27",
+        "contentHash": "zoWgy1wMpYzYny0HFlNI5vOBOaC5G+GGaqmZN7FZmJa8N6DlJyNZCmP2LIbEQRK1cE2DLyM36pMV7Zu0PMv1tQ==",
         "dependencies": {
-          "AWSSDK.Core": "[4.0.3.12, 5.0.0)"
+          "AWSSDK.Core": "[4.0.6.1, 5.0.0)"
         }
       },
       "AWSSDK.SSOOIDC": {
         "type": "Direct",
-        "requested": "[4.0.3, )",
-        "resolved": "4.0.3",
-        "contentHash": "waL3X32i5yhu2w57PyQrFoM4it0B0HWeFrelrL4mskWJryksUolE7jngLEy7mfHMThjJ8kh6n1QSOJhhiRilnA==",
+        "requested": "[4.0.3.28, )",
+        "resolved": "4.0.3.28",
+        "contentHash": "uCVKDI+zl+IEKPNlwJOjf3UItVnodkHLAZp22goRpqEpusZdvtKjorBw4VmU3bMUBrVe8XQNvjA6Ki/8DwE+qw==",
         "dependencies": {
-          "AWSSDK.Core": "[4.0.1.2, 5.0.0)"
+          "AWSSDK.Core": "[4.0.6.1, 5.0.0)"
         }
       },
       "Azure.Identity": {
