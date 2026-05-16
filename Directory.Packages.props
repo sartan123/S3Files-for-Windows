@@ -8,20 +8,15 @@
     <PackageVersion Include="AWSSDK.SQS" Version="4.0.2.31" />
     <PackageVersion Include="AWSSDK.SSO" Version="4.0.2.30" />
     <PackageVersion Include="AWSSDK.SSOOIDC" Version="4.0.3.31" />
-    <!-- Pinned to a version whose default x-ms-version is supported by
-         Azurite's "latest" image (3.35.0 currently caps at API version
-         2025-11-05). Bumping past 12.22.2 makes the SDK send x-ms-version
-         2026-04-06+, which Azurite 3.35 cannot parse. Revisit once Azurite
-         ships support, or once the IT pins ServiceVersion via
-         BlobClientOptions (tracked on OSVFS-Roadmap). -->
-    <PackageVersion Include="Azure.Storage.Blobs" Version="12.22.2" />
-    <!-- Azure Storage Queue carries Event Grid notifications for blob changes;
-         pinned alongside Azure.Storage.Blobs 12.22 for Azurite compatibility. -->
-    <PackageVersion Include="Azure.Storage.Queues" Version="12.20.1" />
-    <!-- Azure.Identity ships DefaultAzureCredential and ManagedIdentityCredential
-         alongside the storage SDK. Pinned alongside Azure.Storage.Blobs to
-         stay below the API version Azurite cannot parse. -->
-    <PackageVersion Include="Azure.Identity" Version="1.13.2" />
+    <!-- Azure Storage SDKs follow the SDK's newest default x-ms-version in
+         production. The IntegrationTests/AzuriteFixture pins ServiceVersion via
+         BlobClientOptions / QueueClientOptions to whatever the running Azurite
+         image still supports, so Dependabot can roll these forward without
+         breaking the IT. Update the pinned ServiceVersion in AzuriteFixture
+         when Azurite ships support for a higher API version. -->
+    <PackageVersion Include="Azure.Storage.Blobs" Version="12.28.0" />
+    <PackageVersion Include="Azure.Storage.Queues" Version="12.26.0" />
+    <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.5.0" />
     <PackageVersion Include="OpenTelemetry" Version="1.15.3" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />

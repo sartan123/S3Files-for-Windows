@@ -20,16 +20,23 @@ internal static class AzureStorageQueueChangeSourceFactory
     /// are resolved against the storage account named on the supplied
     /// <paramref name="credentials"/> (connection string carries it; SAS /
     /// Managed Identity / DefaultAzureCredential branches name it explicitly).
+    /// <paramref name="clientOptions"/> lets callers pin the Storage Queue
+    /// SDK's <c>x-ms-version</c> (and configure retry / pipeline policies);
+    /// when null the SDK falls back to its newest-default
+    /// <c>ServiceVersion</c>. Integration tests pass a pinned-version
+    /// instance so Azurite's lagging API support cannot block Dependabot
+    /// bumps.
     /// </summary>
     public static AzureStorageQueueChangeSource Create(
         string queueUrlOrName,
         string containerName,
         string? keyPrefix,
         IObjectStoreCredentialSource? credentials,
-        ILogger<AzureStorageQueueChangeSource> logger)
+        ILogger<AzureStorageQueueChangeSource> logger,
+        QueueClientOptions? clientOptions = null)
     {
         var azure = NarrowToAzure(credentials);
-        var client = BuildQueueClient(queueUrlOrName, azure);
+        var client = BuildQueueClient(queueUrlOrName, azure, clientOptions);
         return new AzureStorageQueueChangeSource(client, containerName, keyPrefix, logger);
     }
 
@@ -56,15 +63,21 @@ internal static class AzureStorageQueueChangeSourceFactory
     /// <summary>
     /// Builds a <see cref="QueueClient"/> for one of the four Azure auth
     /// branches. Mirrors <c>AzureBlobBackend.BuildServiceClient</c> so the
-    /// same operator config drives both.
+    /// same operator config drives both. <paramref name="clientOptions"/> is
+    /// threaded through every constructor branch so a caller-supplied options
+    /// instance (e.g. ServiceVersion pin from the IT) reaches the SDK; null
+    /// preserves the SDK default behaviour.
     /// </summary>
-    private static QueueClient BuildQueueClient(string queueUrlOrName, AzureCredentialSource credentials)
+    private static QueueClient BuildQueueClient(
+        string queueUrlOrName,
+        AzureCredentialSource credentials,
+        QueueClientOptions? clientOptions)
     {
         // Connection string carries account name + endpoints; the SDK can
         // resolve a bare queue name against it.
         if (credentials.ConnectionString is { } connectionString)
         {
-            return new QueueClient(connectionString, queueUrlOrName);
+            return new QueueClient(connectionString, queueUrlOrName, clientOptions);
         }
 
         // SAS / TokenCredential branches need an explicit queue URL because
@@ -76,12 +89,12 @@ internal static class AzureStorageQueueChangeSourceFactory
 
         if (credentials.Sas is { } sas)
         {
-            return new QueueClient(queueUri, new AzureSasCredential(sas));
+            return new QueueClient(queueUri, new AzureSasCredential(sas), clientOptions);
         }
 
         if (credentials.TokenCredential is { } tokenCredential)
         {
-            return new QueueClient(queueUri, tokenCredential);
+            return new QueueClient(queueUri, tokenCredential, clientOptions);
         }
 
         throw new InvalidOperationException(

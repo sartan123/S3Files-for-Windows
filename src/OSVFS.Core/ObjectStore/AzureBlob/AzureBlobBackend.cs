@@ -80,6 +80,11 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
     /// <c>https://{accountName}.blob.core.windows.net</c> service endpoint —
     /// useful for Azure Stack / sovereign clouds and for pointing a SAS-
     /// authenticated client at Azurite.
+    /// <paramref name="clientOptions"/> lets callers pin the SDK's
+    /// <c>x-ms-version</c> (and configure retry / pipeline policies); when
+    /// null, the SDK's default newest <c>ServiceVersion</c> is used. The
+    /// integration tests pass a pinned-version instance so Azurite's lagging
+    /// API-version support cannot block Azure SDK Dependabot bumps.
     /// </summary>
     public AzureBlobBackend(
         string containerName,
@@ -92,7 +97,8 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
         long? multipartPartSizeBytes = null,
         int? maxConcurrentUploads = null,
         int? maxConcurrentDownloads = null,
-        int? maxMultipartParts = null)
+        int? maxMultipartParts = null,
+        BlobClientOptions? clientOptions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(containerName);
         this.containerName = containerName;
@@ -120,7 +126,7 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
         uploadGate = new SemaphoreSlim(concurrentUploads, concurrentUploads);
         downloadGate = new SemaphoreSlim(concurrentDownloads, concurrentDownloads);
 
-        serviceClient = BuildServiceClient(credentials, endpointUrl);
+        serviceClient = BuildServiceClient(credentials, endpointUrl, clientOptions);
         containerClient = serviceClient.GetBlobContainerClient(containerName);
     }
 
@@ -128,10 +134,15 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
     /// Selects the matching <see cref="BlobServiceClient"/> constructor for
     /// the configured credential branch. Each branch fails fast when its
     /// required keys are missing so the operator gets a clear startup error
-    /// rather than an opaque SDK exception on the first request.
+    /// rather than an opaque SDK exception on the first request. When
+    /// <paramref name="clientOptions"/> is non-null it is threaded into every
+    /// BlobServiceClient constructor so the caller can pin the wire-version
+    /// (or attach retry / pipeline policies); a null is left as null so the
+    /// SDK falls back to its own newest-default <c>ServiceVersion</c> in
+    /// production.
     /// </summary>
     private static BlobServiceClient BuildServiceClient(
-        AzureCredentialSource? credentials, string? endpointUrl)
+        AzureCredentialSource? credentials, string? endpointUrl, BlobClientOptions? clientOptions)
     {
         if (credentials is null)
         {
@@ -145,7 +156,7 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
         // endpoint, so endpointUrl is intentionally ignored here.
         if (credentials.ConnectionString is { } connectionString)
         {
-            return new BlobServiceClient(connectionString);
+            return new BlobServiceClient(connectionString, clientOptions);
         }
 
         // Branches 2-4 all need an account name to build the service URL.
@@ -161,7 +172,7 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
         // Branch 2 — SAS.
         if (credentials.Sas is { } sas)
         {
-            return new BlobServiceClient(serviceUri, new AzureSasCredential(sas));
+            return new BlobServiceClient(serviceUri, new AzureSasCredential(sas), clientOptions);
         }
 
         // Branches 3 / 4 — Managed Identity / DefaultAzureCredential. The
@@ -169,7 +180,7 @@ internal sealed class AzureBlobBackend : IObjectStoreBackend
         // uniformly.
         if (credentials.TokenCredential is { } tokenCredential)
         {
-            return new BlobServiceClient(serviceUri, tokenCredential);
+            return new BlobServiceClient(serviceUri, tokenCredential, clientOptions);
         }
 
         throw new InvalidOperationException(

@@ -213,14 +213,26 @@ The output is a self-contained `osvfs.exe`. End users do **not** need the
 # Unit tests (Windows or Linux)
 dotnet test tests\OSVFS.Core.UnitTests
 
-# Integration tests against LocalStack (requires Docker)
+# Integration tests against LocalStack + Azurite (requires Docker)
 dotnet test tests\OSVFS.Core.IntegrationTests
 ```
 
 The integration test project targets `net10.0` and only references the
 cross-platform `OSVFS.Core` library, so it can run on Linux CI runners
-against [LocalStack](https://github.com/localstack/localstack) via
-[Testcontainers](https://dotnet.testcontainers.org/).
+against [LocalStack](https://github.com/localstack/localstack) and
+[Azurite](https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azurite)
+via [Testcontainers](https://dotnet.testcontainers.org/).
+
+> **Azurite ServiceVersion pin.** The Azure SDK ships its newest default
+> `x-ms-version` with each release, but Azurite trails the live service by
+> several months. To let Dependabot keep `Azure.Storage.Blobs` /
+> `Azure.Storage.Queues` current without breaking the IT, the integration
+> tests pin `BlobClientOptions.ServiceVersion` /
+> `QueueClientOptions.ServiceVersion` to whatever the Azurite "latest" image
+> still understands. Production code path leaves the options as null so the
+> SDK's newest default is used. When Azurite ships support for a higher API
+> version, bump the constants in
+> [`tests/OSVFS.Core.IntegrationTests/AzuriteFixture.cs`](tests/OSVFS.Core.IntegrationTests/AzuriteFixture.cs).
 
 ## Why C# / .NET?
 

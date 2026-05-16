@@ -237,8 +237,14 @@ internal static class MountOptionsBuilder
             var description = $"Azure Managed Identity for '{mount.AccountName}'";
             logger.LogInformation(
                 "Mount '{Mount}': using Azure credentials from {Source}.", mount.Name, description);
+            // Azure.Identity 1.21 deprecated the legacy parameterless / clientId
+            // constructors in favour of the typed ManagedIdentityId factories.
+            // Pass SystemAssigned explicitly — it matches the previous default
+            // behaviour without tripping the CS0618 obsolete warning.
             return AzureCredentialSource.FromTokenCredential(
-                mount.AccountName, new ManagedIdentityCredential(), description);
+                mount.AccountName,
+                new ManagedIdentityCredential(ManagedIdentityId.SystemAssigned),
+                description);
         }
 
         // hasDefaultAzureCredential

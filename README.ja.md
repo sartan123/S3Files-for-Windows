@@ -215,15 +215,28 @@ dotnet publish src\OSVFS -c Release -r win-x64 -o publish\win-x64
 # ユニットテスト (Windows / Linux どちらでも実行可能)
 dotnet test tests\OSVFS.Core.UnitTests
 
-# LocalStack に対するインテグレーションテスト (Docker が必要)
+# LocalStack + Azurite に対するインテグレーションテスト (Docker が必要)
 dotnet test tests\OSVFS.Core.IntegrationTests
 ```
 
 インテグレーションテストプロジェクトは `net10.0` をターゲットとし、クロスプラッ
 トフォームな `OSVFS.Core` のみを参照しているため、Linux CI 上でも
 [Testcontainers](https://dotnet.testcontainers.org/) と
-[LocalStack](https://github.com/localstack/localstack) を使ってビルド・実行
-できます。
+[LocalStack](https://github.com/localstack/localstack) /
+[Azurite](https://learn.microsoft.com/ja-jp/azure/storage/common/storage-use-azurite)
+を使ってビルド・実行できます。
+
+> **Azurite ServiceVersion の pin 運用について。** Azure SDK は新しい
+> リリースのたびにデフォルトの `x-ms-version` を更新しますが、Azurite の
+> 対応はそれより数か月遅れます。Dependabot が `Azure.Storage.Blobs` /
+> `Azure.Storage.Queues` を継続的に更新できるよう、インテグレーション
+> テストでは `BlobClientOptions.ServiceVersion` /
+> `QueueClientOptions.ServiceVersion` を Azurite "latest" イメージが
+> 解釈できる範囲に pin しています。本番側のコードパスでは options を
+> null にして SDK のデフォルト最新版を使います。Azurite が新しい API
+> バージョンに対応した際は、
+> [`tests/OSVFS.Core.IntegrationTests/AzuriteFixture.cs`](tests/OSVFS.Core.IntegrationTests/AzuriteFixture.cs)
+> の定数を更新してください。
 
 ## なぜ C# (.NET) で実装しているのか？
 

@@ -29,11 +29,17 @@ public sealed class AzureBlobBackendTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        adminClient = new BlobContainerClient(azurite.ConnectionString, container);
+        // Pin the SDK's x-ms-version on every Azurite-bound client so a
+        // Dependabot bump of Azure.Storage.Blobs cannot silently roll the
+        // default ServiceVersion past Azurite's max-supported API version
+        // (currently 2025-11-05). See AzuriteFixture for the pin contract.
+        adminClient = new BlobContainerClient(
+            azurite.ConnectionString, container, AzuriteFixture.BuildBlobClientOptions());
         await adminClient.CreateIfNotExistsAsync();
         backend = new AzureBlobBackend(
             container,
-            AzureCredentialSource.FromConnectionString(azurite.ConnectionString, "azurite"));
+            AzureCredentialSource.FromConnectionString(azurite.ConnectionString, "azurite"),
+            clientOptions: AzuriteFixture.BuildBlobClientOptions());
     }
 
     public async Task DisposeAsync()
@@ -184,7 +190,8 @@ public sealed class AzureBlobBackendTests : IAsyncLifetime
             multipartPartSizeBytes: 256 * 1024,     // 256 KiB blocks
             maxConcurrentUploads: 2,
             maxConcurrentDownloads: 2,
-            maxMultipartParts: 4);
+            maxMultipartParts: 4,
+            clientOptions: AzuriteFixture.BuildBlobClientOptions());
 
         var payload = new byte[1_500_000]; // ~1.5 MiB across multiple 256 KiB blocks
         new Random(42).NextBytes(payload);
@@ -241,7 +248,8 @@ public sealed class AzureBlobBackendTests : IAsyncLifetime
     /// </summary>
     private async Task SetSoftDeleteAsync(bool enabled)
     {
-        var serviceClient = new BlobServiceClient(azurite.ConnectionString);
+        var serviceClient = new BlobServiceClient(
+            azurite.ConnectionString, AzuriteFixture.BuildBlobClientOptions());
         var resp = await serviceClient.GetPropertiesAsync();
         var props = resp.Value;
         props.DeleteRetentionPolicy = new BlobRetentionPolicy
